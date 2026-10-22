@@ -1,0 +1,123 @@
+// Music streaming app schema - Spotify-style local setup
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Single-user local app - one default user record
+model User {
+  id              String   @id @default(cuid())
+  name            String   @default("Listener")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  playlists       Playlist[]
+  savedAlbums     SavedAlbum[]
+  stylePreference StylePreference?
+  history         ListeningHistory[]
+}
+
+// Cached track metadata (avoid re-fetching from JioSaavn)
+model Track {
+  id          String   @id @default(cuid())
+  saavnId     String   @unique // JioSaavn song id
+  title       String
+  artist      String
+  album       String?
+  albumId     String?
+  duration   Int      @default(0) // seconds
+  image       String?  // cover art URL
+  streamUrl   String?
+  language    String?
+  label       String?
+  year        String?
+  // Mood/theme features extracted from metadata - used by recommendation algo
+  mood       String?  // e.g. "energetic", "chill", "romantic", "sad"
+  genre      String?
+  tempo      String?  // "slow" | "mid" | "fast"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  playlists   PlaylistTrack[]
+  history     ListeningHistory[]
+}
+
+model Playlist {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  coverImage  String?
+  mood        String?  // optional mood tag for the playlist itself
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tracks      PlaylistTrack[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model PlaylistTrack {
+  id         String   @id @default(cuid())
+  playlistId String
+  trackId    String
+  position   Int      @default(0)
+  addedAt    DateTime @default(now())
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  track      Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  @@unique([playlistId, trackId])
+  @@index([playlistId, position])
+}
+
+model SavedAlbum {
+  id        String   @id @default(cuid())
+  userId    String
+  saavnId   String   // JioSaavn album id
+  title     String
+  artist    String
+  image     String?
+  year      String?
+  language  String?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, saavnId])
+  @@index([userId])
+}
+
+// User's style/mood preferences - drives the auto-play-next algorithm
+model StylePreference {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // JSON-encoded array of preferred moods e.g. ["energetic","romantic","chill"]
+  preferredMoods  String   @default("[]")
+  // JSON-encoded array of preferred languages e.g. ["hindi","english","punjabi"]
+  preferredLangs  String   @default("[]")
+  // JSON-encoded array of preferred genres
+  preferredGenres String   @default("[]")
+  // How adventurous the auto-play should be: 0=stay close to current, 1=explore widely
+  discoveryLevel  Float    @default(0.3)
+  // Auto-play when playlist ends
+  autoPlayNext    Boolean  @default(true)
+  updatedAt       DateTime @updatedAt
+}
+
+// Track listening history for taste profiling & play-next decisions
+model ListeningHistory {
+  id        String   @id @default(cuid())
+  userId    String
+  trackId   String
+  playedAt  DateTime @default(now())
+  completed Boolean  @default(false) // did the user listen to >50% of it?
+  skipped   Boolean  @default(false)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track     Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  @@index([userId, playedAt])
+  @@index([trackId])
+}
