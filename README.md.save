@@ -1,0 +1,27 @@
+# 🎵 Resonate
+
+A Spotify-style personal music player with mood-aware auto-play-next algorithm.
+
+## Features
+- Full 320kbps song streaming via JioSaavn
+- Mood-aware auto-play-next algorithm
+- Playlists (create, edit, delete)
+- Saved albums
+- Synced lyrics (LRCLIB)
+- Spotify-style dark UI with animated visualizer
+- 100% client-side — no database, no login
+
+## Tech Stack
+- Next.js 16 + TypeScript + Tailwind 4 + shadcn/ui
+- Zustand + localStorage (no DB)
+- JioSaavn API (music) + LRCLIB (lyrics)
+
+## Quick Start
+
+npm install --legacy-peer-deps
+npm run dev
+
+Open http://localhost:3000
+
+## Legal
+For personal use only.
