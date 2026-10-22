@@ -2,14 +2,7 @@ import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { getSongDetails } from "@/lib/saavn"
 import { extractTheme } from "@/lib/recommend"
-
-async function getOrCreateUser() {
-  let user = await db.user.findFirst()
-  if (!user) {
-    user = await db.user.create({ data: { name: "Listener" } })
-  }
-  return user
-}
+import { getCurrentUser } from "@/lib/session"
 
 // POST /api/playlists/[id]/tracks
 // body: { saavnId: string, title, artist, album, image, streamUrl, duration, language, label, year }
@@ -18,6 +11,12 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  let user
+  try {
+    user = await getCurrentUser()
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
   const { id: playlistId } = await params
   const body = await req.json()
   const {
@@ -37,7 +36,6 @@ export async function POST(
   }
 
   // Ensure playlist exists & belongs to user
-  const user = await getOrCreateUser()
   const playlist = await db.playlist.findUnique({ where: { id: playlistId } })
   if (!playlist || playlist.userId !== user.id) {
     return NextResponse.json({ error: "Playlist not found" }, { status: 404 })
@@ -120,6 +118,18 @@ export async function GET(
     },
   })
   if (!playlist) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  // Allow read for owner OR for public playlists
+  if (!playlist.isPublic) {
+    let user
+    try {
+      user = await getCurrentUser()
+    } catch {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+    if (playlist.userId !== user.id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+  }
   return NextResponse.json({ tracks: playlist.tracks.map((pt) => pt.track) })
 }
 
@@ -128,7 +138,17 @@ export async function DELETE(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  let user
+  try {
+    user = await getCurrentUser()
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
   const { id: playlistId } = await params
+  const playlist = await db.playlist.findUnique({ where: { id: playlistId } })
+  if (!playlist || playlist.userId !== user.id) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 })
+  }
   const { searchParams } = new URL(req.url)
   const trackId = searchParams.get("trackId")
   const saavnId = searchParams.get("saavnId")

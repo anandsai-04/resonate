@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { getAlbumDetails, searchAlbums } from "@/lib/saavn"
 import { db } from "@/lib/db"
+import { getCurrentUser } from "@/lib/session"
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
@@ -8,13 +9,13 @@ export async function GET(req: Request) {
   const query = searchParams.get("q")
 
   try {
-    // /api/album?id=XYZ -> fetch full album
+    // /api/album?id=XYZ -> fetch full album (PUBLIC - no auth needed)
     if (id) {
       const album = await getAlbumDetails(id)
       if (!album) return NextResponse.json({ error: "Not found" }, { status: 404 })
       return NextResponse.json({ album })
     }
-    // /api/album?q=XYZ -> search
+    // /api/album?q=XYZ -> search (PUBLIC)
     if (query) {
       const albums = await searchAlbums(query, 12)
       return NextResponse.json({ albums })
@@ -25,15 +26,21 @@ export async function GET(req: Request) {
   }
 }
 
-// Save an album to user's library
+// Save an album to user's library (REQUIRES AUTH)
 export async function POST(req: Request) {
+  let user
+  try {
+    user = await getCurrentUser()
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
   try {
     const body = await req.json()
     const { saavnId, title, artist, image, year, language } = body
     if (!saavnId || !title) {
       return NextResponse.json({ error: "saavnId and title required" }, { status: 400 })
     }
-    const user = await getOrCreateUser()
     const saved = await db.savedAlbum.upsert({
       where: { userId_saavnId: { userId: user.id, saavnId } },
       create: { userId: user.id, saavnId, title, artist, image, year, language },
@@ -45,21 +52,19 @@ export async function POST(req: Request) {
   }
 }
 
-// Remove album from library
+// Remove album from library (REQUIRES AUTH)
 export async function DELETE(req: Request) {
+  let user
+  try {
+    user = await getCurrentUser()
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
   const { searchParams } = new URL(req.url)
   const saavnId = searchParams.get("saavnId")
   if (!saavnId) return NextResponse.json({ error: "saavnId required" }, { status: 400 })
-  const user = await getOrCreateUser()
+
   await db.savedAlbum.deleteMany({ where: { userId: user.id, saavnId } })
   return NextResponse.json({ ok: true })
-}
-
-// Single user helper
-async function getOrCreateUser() {
-  let user = await db.user.findFirst()
-  if (!user) {
-    user = await db.user.create({ data: { name: "Listener" } })
-  }
-  return user
 }

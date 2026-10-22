@@ -1,19 +1,17 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
-
-async function getOrCreateUser() {
-  let user = await db.user.findFirst()
-  if (!user) {
-    user = await db.user.create({ data: { name: "Listener" } })
-  }
-  return user
-}
+import { getCurrentUser } from "@/lib/session"
 
 // List user playlists (optionally include tracks)
 export async function GET(req: Request) {
+  let user
+  try {
+    user = await getCurrentUser()
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
   const { searchParams } = new URL(req.url)
   const withTracks = searchParams.get("withTracks") === "1"
-  const user = await getOrCreateUser()
   const playlists = await db.playlist.findMany({
     where: { userId: user.id },
     include: withTracks
@@ -21,7 +19,6 @@ export async function GET(req: Request) {
       : false,
     orderBy: { updatedAt: "desc" },
   })
-  // Add track count when not fetching tracks
   const result = await Promise.all(
     playlists.map(async (p: any) => {
       if (withTracks) return p
@@ -34,10 +31,15 @@ export async function GET(req: Request) {
 
 // Create a new playlist
 export async function POST(req: Request) {
+  let user
+  try {
+    user = await getCurrentUser()
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
   const body = await req.json()
   const { name, description, mood, coverImage } = body
   if (!name) return NextResponse.json({ error: "name required" }, { status: 400 })
-  const user = await getOrCreateUser()
   const playlist = await db.playlist.create({
     data: { name, description, mood, coverImage, userId: user.id },
   })

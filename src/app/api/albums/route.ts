@@ -1,17 +1,15 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import { getCurrentUser } from "@/lib/session"
 
-async function getOrCreateUser() {
-  let user = await db.user.findFirst()
-  if (!user) {
-    user = await db.user.create({ data: { name: "Listener" } })
-  }
-  return user
-}
-
-// List user's saved albums
+// List user's saved albums (REQUIRES AUTH)
 export async function GET() {
-  const user = await getOrCreateUser()
+  let user
+  try {
+    user = await getCurrentUser()
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
   const albums = await db.savedAlbum.findMany({
     where: { userId: user.id },
     orderBy: { createdAt: "desc" },

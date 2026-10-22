@@ -1,6 +1,8 @@
 "use client"
 
 import { useEffect, useState, useCallback } from "react"
+import { useSession } from "next-auth/react"
+import { useRouter } from "next/navigation"
 import { usePlayer } from "@/lib/player-store"
 import { Sidebar } from "@/components/sidebar/sidebar"
 import { TopBar } from "@/components/sidebar/top-bar"
@@ -36,9 +38,11 @@ interface InitData {
   playlists: PlaylistSummary[]
   savedAlbums: SavedAlbum[]
   preferences: {
-    preferredMoods: string[]
-    preferredLangs: string[]
-    preferredGenres: string[]
+    moods?: string[]
+    languages?: string[]
+    artists?: string[]
+    genres?: string[]
+    albums?: string[]
     discoveryLevel: number
     autoPlayNext: boolean
   }
@@ -49,24 +53,35 @@ export default function Home() {
   // Initialise the audio engine (creates an <audio> element, wires events)
   useAudioEngine()
 
-  const {
-    view,
-    setPreferences,
-  } = usePlayer()
+  const { data: session, status } = useSession()
+  const router = useRouter()
+  const { view, setPreferences } = usePlayer()
 
   const [data, setData] = useState<InitData | null>(null)
   const [loading, setLoading] = useState(true)
   const [queueOpen, setQueueOpen] = useState(false)
   const [lyricsOpen, setLyricsOpen] = useState(false)
 
+  // Redirect to sign-in if unauthenticated
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.push("/auth/signin")
+    }
+  }, [status, router])
+
   const refresh = useCallback(async () => {
+    if (status !== "authenticated") return
     try {
       const res = await fetch("/api/init")
+      if (res.status === 401) {
+        router.push("/auth/signin")
+        return
+      }
       const json = await res.json()
       setData(json)
       setPreferences({
-        preferredMoods: json.preferences.preferredMoods,
-        preferredLangs: json.preferences.preferredLangs,
+        preferredMoods: json.preferences.moods ?? [],
+        preferredLangs: json.preferences.languages ?? [],
         discoveryLevel: json.preferences.discoveryLevel,
         autoPlayNext: json.preferences.autoPlayNext,
       })
@@ -104,7 +119,7 @@ export default function Home() {
 
   useEffect(() => {
     refresh()
-  }, [refresh])
+  }, [refresh, status])
 
   // Listen for sidebar refresh events
   useEffect(() => {
@@ -116,6 +131,18 @@ export default function Home() {
       window.removeEventListener("albums-changed", handler)
     }
   }, [refresh])
+
+  // While session is loading or user is unauthenticated, show a loading screen
+  if (status === "loading" || status === "unauthenticated") {
+    return (
+      <div className="h-screen flex items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="h-12 w-12 rounded-full border-2 border-primary border-t-transparent animate-spin mx-auto mb-4" />
+          <p className="text-sm text-muted-foreground">Loading Resonate...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">

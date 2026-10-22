@@ -1,19 +1,24 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
-
-async function getOrCreateUser() {
-  let user = await db.user.findFirst()
-  if (!user) {
-    user = await db.user.create({ data: { name: "Listener" } })
-  }
-  return user
-}
+import { getCurrentUser } from "@/lib/session"
 
 // GET /api/init - bootstrap user + load everything needed at app start
 export async function GET() {
-  const user = await getOrCreateUser()
+  let user
+  try {
+    user = await getCurrentUser()
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
 
-  const [playlists, savedAlbums, prefsRow, historyRows] = await Promise.all([
+  // Ensure preference row exists
+  const prefs = await db.userPreference.upsert({
+    where: { userId: user.id },
+    create: { userId: user.id },
+    update: {},
+  })
+
+  const [playlists, savedAlbums, historyRows] = await Promise.all([
     db.playlist.findMany({
       where: { userId: user.id },
       orderBy: { updatedAt: "desc" },
@@ -22,7 +27,6 @@ export async function GET() {
       where: { userId: user.id },
       orderBy: { createdAt: "desc" },
     }),
-    db.stylePreference.findUnique({ where: { userId: user.id } }),
     db.listeningHistory.findMany({
       where: { userId: user.id },
       include: { track: true },
@@ -40,24 +44,28 @@ export async function GET() {
   )
 
   return NextResponse.json({
-    user,
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      regdNumber: user.regdNumber,
+      course: user.course,
+      university: user.university,
+      year: user.year,
+      role: user.role,
+    },
     playlists: playlistsWithCounts,
     savedAlbums,
-    preferences: prefsRow
-      ? {
-          preferredMoods: JSON.parse(prefsRow.preferredMoods),
-          preferredLangs: JSON.parse(prefsRow.preferredLangs),
-          preferredGenres: JSON.parse(prefsRow.preferredGenres),
-          discoveryLevel: prefsRow.discoveryLevel,
-          autoPlayNext: prefsRow.autoPlayNext,
-        }
-      : {
-          preferredMoods: [],
-          preferredLangs: [],
-          preferredGenres: [],
-          discoveryLevel: 0.3,
-          autoPlayNext: true,
-        },
+    preferences: {
+      genres: prefs.genres,
+      languages: prefs.languages,
+      artists: prefs.artists,
+      albums: prefs.albums,
+      moods: prefs.moods,
+      discoveryLevel: prefs.discoveryLevel,
+      autoPlayNext: prefs.autoPlayNext,
+      explicitFilter: prefs.explicitFilter,
+    },
     recentlyPlayed: historyRows.map((h) => h.track),
   })
 }

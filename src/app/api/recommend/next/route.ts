@@ -2,14 +2,7 @@ import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { pickNextTrack, buildTasteProfile, type Mood } from "@/lib/recommend"
 import type { SaavnSong } from "@/lib/saavn"
-
-async function getOrCreateUser() {
-  let user = await db.user.findFirst()
-  if (!user) {
-    user = await db.user.create({ data: { name: "Listener" } })
-  }
-  return user
-}
+import { getCurrentUser } from "@/lib/session"
 
 /**
  * GET /api/recommend/next
@@ -19,9 +12,16 @@ async function getOrCreateUser() {
  * Returns a single track that should play next, based on:
  *   - current song theme (mood + tempo + language)
  *   - user's taste profile (recent history)
- *   - user's style preferences (preferred moods/langs, discovery level)
+ *   - user's preferences (moods, languages, artists, discovery level)
  */
 export async function GET(req: Request) {
+  let user
+  try {
+    user = await getCurrentUser()
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
   const { searchParams } = new URL(req.url)
   const currentSaavnId = searchParams.get("saavnId")
   const exclude = (searchParams.get("exclude") ?? "")
@@ -29,19 +29,16 @@ export async function GET(req: Request) {
     .map((s) => s.trim())
     .filter(Boolean)
 
-  const user = await getOrCreateUser()
-
-  // Load preferences
-  const prefsRow = await db.stylePreference.findUnique({
+  // Load or create preferences
+  const prefs = await db.userPreference.upsert({
     where: { userId: user.id },
+    create: { userId: user.id },
+    update: {},
   })
-  const preferredMoods: Mood[] = prefsRow
-    ? (JSON.parse(prefsRow.preferredMoods) as Mood[])
-    : []
-  const preferredLanguages: string[] = prefsRow
-    ? JSON.parse(prefsRow.preferredLangs)
-    : []
-  const discoveryLevel: number = prefsRow?.discoveryLevel ?? 0.3
+
+  const preferredMoods: Mood[] = prefs.moods as Mood[]
+  const preferredLanguages: string[] = prefs.languages
+  const discoveryLevel: number = prefs.discoveryLevel
 
   // Build taste profile from last 50 plays
   const historyRows = await db.listeningHistory.findMany({
@@ -61,7 +58,7 @@ export async function GET(req: Request) {
     })),
   )
 
-  // Current song (if provided) - prefer cached Track row, fall back to API
+  // Current song (if provided) - prefer cached Track row
   let currentSong: SaavnSong | null = null
   if (currentSaavnId) {
     const t = await db.track.findUnique({ where: { saavnId: currentSaavnId } })

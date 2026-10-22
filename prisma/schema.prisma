@@ -1,48 +1,103 @@
-// Music streaming app schema - Spotify-style local setup
+// Resonate — Campus music player schema (PostgreSQL)
+// Multi-user: every record is scoped to a User (campus student).
+
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Supabase / Neon use a pooled connection for the app (DATABASE_URL)
+  // and a direct connection for migrations (DIRECT_URL).
+  directUrl = env("DIRECT_URL")
 }
 
-// Single-user local app - one default user record
+enum Role {
+  STUDENT
+  MODERATOR
+  ADMIN
+}
+
+// ---------------------------------------------------------------------------
+// PRIMARY TABLE — Student identity
+// ---------------------------------------------------------------------------
 model User {
-  id              String   @id @default(cuid())
-  name            String   @default("Listener")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  playlists       Playlist[]
-  savedAlbums     SavedAlbum[]
-  stylePreference StylePreference?
-  history         ListeningHistory[]
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  // Student-specific fields
+  regdNumber    String?   @unique             // registration / roll number
+  course        String?                       // e.g. "B.Tech Computer Science"
+  university    String?                       // derived from email domain
+  year          Int?                          // 1, 2, 3, 4
+  role          Role      @default(STUDENT)
+  emailVerified DateTime?
+  joinedAt      DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  preference    UserPreference?
+  playlists     Playlist[]
+  savedAlbums   SavedAlbum[]
+  history       ListeningHistory[]
 }
 
-// Cached track metadata (avoid re-fetching from JioSaavn)
-model Track {
-  id          String   @id @default(cuid())
-  saavnId     String   @unique // JioSaavn song id
-  title       String
-  artist      String
-  album       String?
-  albumId     String?
-  duration   Int      @default(0) // seconds
-  image       String?  // cover art URL
-  streamUrl   String?
-  language    String?
-  label       String?
-  year        String?
-  // Mood/theme features extracted from metadata - used by recommendation algo
-  mood       String?  // e.g. "energetic", "chill", "romantic", "sad"
-  genre      String?
-  tempo      String?  // "slow" | "mid" | "fast"
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+// ---------------------------------------------------------------------------
+// SECONDARY TABLE — Music preferences (one row per user)
+// ---------------------------------------------------------------------------
+model UserPreference {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  playlists   PlaylistTrack[]
-  history     ListeningHistory[]
+  // Preference arrays — native Postgres arrays, fast & indexed
+  genres          String[] @default([])     // ["rock", "bollywood", "lo-fi"]
+  languages       String[] @default([])     // ["hindi", "english", "punjabi"]
+  artists         String[] @default([])     // ["Arijit Singh", "The Weeknd"]
+  albums          String[] @default([])     // source album IDs the user loves
+  moods           String[] @default([])     // ["romantic", "chill", "energetic"]
+
+  // Algorithm tuning
+  discoveryLevel  Float    @default(0.3)    // 0=safe, 1=wild exploration
+  autoPlayNext    Boolean  @default(true)
+  explicitFilter  Boolean  @default(false)
+
+  updatedAt       DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Cached track metadata (shared across all users)
+// ---------------------------------------------------------------------------
+model Track {
+  id         String   @id @default(cuid())
+  // Unique ID from upstream source (iTunes trackId or JioSaavn songId)
+  // Kept as `saavnId` for backward-compat with existing code.
+  saavnId    String   @unique
+  source     String   @default("itunes")   // "itunes" | "saavn"
+  title      String
+  artist     String
+  album      String?
+  albumId    String?
+  duration   Int      @default(0)
+  image      String?
+  streamUrl  String?
+  language   String?
+  label      String?
+  year       String?
+  mood       String?
+  tempo      String?
+  genre      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  playlists  PlaylistTrack[]
+  history    ListeningHistory[]
+  savedBy    SavedAlbum[]
+
+  @@index([saavnId])
+  @@index([mood])
+  @@index([artist])
 }
 
 model Playlist {
@@ -50,7 +105,8 @@ model Playlist {
   name        String
   description String?
   coverImage  String?
-  mood        String?  // optional mood tag for the playlist itself
+  mood        String?
+  isPublic    Boolean  @default(false)   // shareable playlists
   userId      String
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   tracks      PlaylistTrack[]
@@ -58,6 +114,7 @@ model Playlist {
   updatedAt   DateTime @updatedAt
 
   @@index([userId])
+  @@index([isPublic])
 }
 
 model PlaylistTrack {
@@ -76,47 +133,30 @@ model PlaylistTrack {
 model SavedAlbum {
   id        String   @id @default(cuid())
   userId    String
-  saavnId   String   // JioSaavn album id
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  saavnId   String                              // source album ID
   title     String
   artist    String
   image     String?
   year      String?
   language  String?
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trackId   String?
+  track     Track?   @relation(fields: [trackId], references: [id])
   createdAt DateTime @default(now())
 
   @@unique([userId, saavnId])
   @@index([userId])
 }
 
-// User's style/mood preferences - drives the auto-play-next algorithm
-model StylePreference {
-  id              String   @id @default(cuid())
-  userId          String   @unique
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // JSON-encoded array of preferred moods e.g. ["energetic","romantic","chill"]
-  preferredMoods  String   @default("[]")
-  // JSON-encoded array of preferred languages e.g. ["hindi","english","punjabi"]
-  preferredLangs  String   @default("[]")
-  // JSON-encoded array of preferred genres
-  preferredGenres String   @default("[]")
-  // How adventurous the auto-play should be: 0=stay close to current, 1=explore widely
-  discoveryLevel  Float    @default(0.3)
-  // Auto-play when playlist ends
-  autoPlayNext    Boolean  @default(true)
-  updatedAt       DateTime @updatedAt
-}
-
-// Track listening history for taste profiling & play-next decisions
 model ListeningHistory {
   id        String   @id @default(cuid())
   userId    String
-  trackId   String
-  playedAt  DateTime @default(now())
-  completed Boolean  @default(false) // did the user listen to >50% of it?
-  skipped   Boolean  @default(false)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trackId   String
   track     Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  playedAt  DateTime @default(now())
+  completed Boolean  @default(false)
+  skipped   Boolean  @default(false)
 
   @@index([userId, playedAt])
   @@index([trackId])

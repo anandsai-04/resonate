@@ -5,72 +5,147 @@ import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { useToast } from "@/hooks/use-toast"
 import { usePlayer } from "@/lib/player-store"
 import { MOODS, MOOD_LABELS, LANGUAGES, type Mood } from "@/lib/recommend"
 import { cn } from "@/lib/utils"
-import { Sparkles, Save, RotateCcw, Brain, Globe, Music4 } from "lucide-react"
+import {
+  Sparkles,
+  Save,
+  RotateCcw,
+  Brain,
+  Globe,
+  Music4,
+  User as UserIcon,
+  Plus,
+  X,
+} from "lucide-react"
+import { useRouter } from "next/navigation"
+import { signOut } from "next-auth/react"
 
 interface Prefs {
-  preferredMoods: string[]
-  preferredLangs: string[]
-  preferredGenres: string[]
+  genres: string[]
+  languages: string[]
+  artists: string[]
+  albums: string[]
+  moods: string[]
   discoveryLevel: number
   autoPlayNext: boolean
+  explicitFilter: boolean
 }
 
 const DEFAULT_PREFS: Prefs = {
-  preferredMoods: [],
-  preferredLangs: [],
-  preferredGenres: [],
+  genres: [],
+  languages: [],
+  artists: [],
+  albums: [],
+  moods: [],
   discoveryLevel: 0.3,
   autoPlayNext: true,
+  explicitFilter: false,
 }
+
+const COMMON_GENRES = [
+  "bollywood", "pop", "rock", "hip-hop", "lo-fi", "edm", "classical",
+  "punjabi", "indie", "r&b", "jazz", "folk", "devotional", "k-pop",
+]
 
 export function PreferencesView() {
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [newArtist, setNewArtist] = useState("")
+  const [newGenre, setNewGenre] = useState("")
+  const [userEmail, setUserEmail] = useState<string | null>(null)
   const { toast } = useToast()
   const setPreferences = usePlayer((s) => s.setPreferences)
+  const router = useRouter()
 
   useEffect(() => {
     fetch("/api/preferences")
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (r.status === 401) {
+          router.push("/auth/signin")
+          return null
+        }
+        return r.json()
+      })
       .then((d) => {
+        if (!d) return
         setPrefs({
-          preferredMoods: d.preferredMoods ?? [],
-          preferredLangs: d.preferredLangs ?? [],
-          preferredGenres: d.preferredGenres ?? [],
+          genres: d.genres ?? [],
+          languages: d.languages ?? [],
+          artists: d.artists ?? [],
+          albums: d.albums ?? [],
+          moods: d.moods ?? [],
           discoveryLevel: typeof d.discoveryLevel === "number" ? d.discoveryLevel : 0.3,
           autoPlayNext: d.autoPlayNext ?? true,
+          explicitFilter: d.explicitFilter ?? false,
         })
         setPreferences({
-          preferredMoods: d.preferredMoods ?? [],
-          preferredLangs: d.preferredLangs ?? [],
+          preferredMoods: d.moods ?? [],
+          preferredLangs: d.languages ?? [],
           discoveryLevel: typeof d.discoveryLevel === "number" ? d.discoveryLevel : 0.3,
           autoPlayNext: d.autoPlayNext ?? true,
         })
       })
       .finally(() => setLoading(false))
-  }, [setPreferences])
+
+    // Fetch user info for the account section
+    fetch("/api/init")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d?.user?.email && setUserEmail(d.user.email))
+      .catch(() => {})
+  }, [setPreferences, router])
 
   const toggleMood = (mood: Mood) => {
     setPrefs((p) => ({
       ...p,
-      preferredMoods: p.preferredMoods.includes(mood)
-        ? p.preferredMoods.filter((m) => m !== mood)
-        : [...p.preferredMoods, mood],
+      moods: p.moods.includes(mood)
+        ? p.moods.filter((m) => m !== mood)
+        : [...p.moods, mood],
     }))
   }
 
   const toggleLang = (lang: string) => {
     setPrefs((p) => ({
       ...p,
-      preferredLangs: p.preferredLangs.includes(lang)
-        ? p.preferredLangs.filter((l) => l !== lang)
-        : [...p.preferredLangs, lang],
+      languages: p.languages.includes(lang)
+        ? p.languages.filter((l) => l !== lang)
+        : [...p.languages, lang],
     }))
+  }
+
+  const toggleGenre = (genre: string) => {
+    setPrefs((p) => ({
+      ...p,
+      genres: p.genres.includes(genre)
+        ? p.genres.filter((g) => g !== genre)
+        : [...p.genres, genre],
+    }))
+  }
+
+  const addArtist = () => {
+    const a = newArtist.trim()
+    if (!a) return
+    if (!prefs.artists.includes(a)) {
+      setPrefs((p) => ({ ...p, artists: [...p.artists, a] }))
+    }
+    setNewArtist("")
+  }
+
+  const removeArtist = (artist: string) => {
+    setPrefs((p) => ({ ...p, artists: p.artists.filter((a) => a !== artist) }))
+  }
+
+  const addGenre = () => {
+    const g = newGenre.trim().toLowerCase()
+    if (!g) return
+    if (!prefs.genres.includes(g)) {
+      setPrefs((p) => ({ ...p, genres: [...p.genres, g] }))
+    }
+    setNewGenre("")
   }
 
   const handleSave = async () => {
@@ -82,8 +157,8 @@ export function PreferencesView() {
         body: JSON.stringify(prefs),
       })
       setPreferences({
-        preferredMoods: prefs.preferredMoods,
-        preferredLangs: prefs.preferredLangs,
+        preferredMoods: prefs.moods,
+        preferredLangs: prefs.languages,
         discoveryLevel: prefs.discoveryLevel,
         autoPlayNext: prefs.autoPlayNext,
       })
@@ -128,10 +203,33 @@ export function PreferencesView() {
           Style Preferences
         </h1>
         <p className="text-muted-foreground text-sm">
-          Tune the auto-play-next algorithm. These settings shape which tracks
-          get suggested when your playlist ends or queue runs dry.
+          Tune the auto-play-next algorithm. These preferences shape which
+          tracks get suggested when your playlist ends.
         </p>
       </header>
+
+      {/* Account section */}
+      {userEmail && (
+        <Card className="bg-card/60 backdrop-blur">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <UserIcon className="h-4 w-4 text-primary" /> Account
+            </CardTitle>
+            <CardDescription>
+              You&apos;re signed in as <span className="text-foreground font-medium">{userEmail}</span>
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => signOut({ callbackUrl: "/auth/signin" })}
+            >
+              Sign out
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Auto-play-next toggle */}
       <Card className="bg-card/60 backdrop-blur">
@@ -140,8 +238,8 @@ export function PreferencesView() {
             <Brain className="h-4 w-4 text-primary" /> Auto-play next
           </CardTitle>
           <CardDescription>
-            When enabled, the player fetches a track matching the current song's
-            mood (your taste + theme) when nothing else is queued.
+            When enabled, the player fetches a track matching the current song&apos;s
+            mood when nothing else is queued.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -200,7 +298,7 @@ export function PreferencesView() {
         <CardContent>
           <div className="flex flex-wrap gap-2">
             {MOODS.map((m) => {
-              const active = prefs.preferredMoods.includes(m)
+              const active = prefs.moods.includes(m)
               return (
                 <button
                   key={m}
@@ -233,7 +331,7 @@ export function PreferencesView() {
         <CardContent>
           <div className="flex flex-wrap gap-2">
             {LANGUAGES.map((l) => {
-              const active = prefs.preferredLangs.includes(l)
+              const active = prefs.languages.includes(l)
               return (
                 <button
                   key={l}
@@ -249,6 +347,112 @@ export function PreferencesView() {
                 </button>
               )
             })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Genre preferences */}
+      <Card className="bg-card/60 backdrop-blur">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Music4 className="h-4 w-4 text-primary" /> Preferred genres
+          </CardTitle>
+          <CardDescription>
+            Genres you enjoy. Click to toggle, or add your own.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {COMMON_GENRES.map((g) => {
+              const active = prefs.genres.includes(g)
+              return (
+                <button
+                  key={g}
+                  onClick={() => toggleGenre(g)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-full text-xs font-semibold capitalize transition-all",
+                    active
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-white/5 text-muted-foreground hover:bg-white/10 hover:text-white",
+                  )}
+                >
+                  {g}
+                </button>
+              )
+            })}
+            {/* Custom genres */}
+            {prefs.genres
+              .filter((g) => !COMMON_GENRES.includes(g))
+              .map((g) => (
+                <span
+                  key={g}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold bg-primary text-primary-foreground"
+                >
+                  {g}
+                  <button onClick={() => toggleGenre(g)}>
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+          </div>
+          <div className="flex gap-2">
+            <Input
+              value={newGenre}
+              onChange={(e) => setNewGenre(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addGenre())}
+              placeholder="Add custom genre..."
+              className="bg-card"
+            />
+            <Button onClick={addGenre} variant="outline">
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Artist preferences */}
+      <Card className="bg-card/60 backdrop-blur">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Music4 className="h-4 w-4 text-primary" /> Favorite artists
+          </CardTitle>
+          <CardDescription>
+            Artists you love. The algorithm will bias recommendations toward them.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {prefs.artists.length === 0 && (
+              <span className="text-xs text-muted-foreground italic">
+                No favorite artists yet. Add a few below.
+              </span>
+            )}
+            {prefs.artists.map((a) => (
+              <span
+                key={a}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 text-foreground"
+              >
+                {a}
+                <button
+                  onClick={() => removeArtist(a)}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <Input
+              value={newArtist}
+              onChange={(e) => setNewArtist(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addArtist())}
+              placeholder="Add artist name..."
+              className="bg-card"
+            />
+            <Button onClick={addArtist} variant="outline">
+              <Plus className="h-4 w-4" />
+            </Button>
           </div>
         </CardContent>
       </Card>
