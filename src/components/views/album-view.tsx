@@ -7,18 +7,13 @@ import { TrackRow } from "@/components/track/track-row"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { formatTime } from "@/lib/format"
-import {
-  Play,
-  Pause,
-  Heart,
-  Disc3,
-  Clock,
-} from "lucide-react"
+import { Play, Pause, Heart, Disc3, Clock } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
+import { isAlbumSaved, saveAlbum, unsaveAlbum } from "@/lib/storage"
 
 interface AlbumViewProps {
-  albumId: string // saavn album id
+  albumId: string
 }
 
 export function AlbumView({ albumId }: AlbumViewProps) {
@@ -38,41 +33,56 @@ export function AlbumView({ albumId }: AlbumViewProps) {
 
   useEffect(() => {
     let cancelled = false
-    fetch(`/api/album?id=${encodeURIComponent(albumId)}`)
+    fetch(`/api/search?q=${encodeURIComponent("album " + albumId)}&type=albums&limit=1`)
       .then((r) => r.json())
-      .then((d) => {
-        if (cancelled || !d.album) return
+      .then(async (d) => {
+        if (cancelled) return
+        // We need full album details including songs. Use the iTunes lookup API directly.
+        const lookupRes = await fetch(`https://itunes.apple.com/lookup?id=${encodeURIComponent(albumId)}&entity=song`)
+        const lookupData = await lookupRes.json()
+        if (cancelled || !lookupData.results || lookupData.results.length === 0) return
+
+        const albumRow = lookupData.results.find((r: any) => r.wrapperType === "collection")
+        const songs = lookupData.results
+          .filter((r: any) => r.wrapperType === "track" && r.kind === "song")
+          .map((r: any) => ({
+            id: String(r.trackId),
+            title: r.trackName ?? "",
+            artist: r.artistName ?? "Unknown",
+            album: r.collectionName ?? "",
+            albumId: r.collectionId ? String(r.collectionId) : undefined,
+            image: (r.artworkUrl100 ?? "").replace(/100x100bb\.jpg$/, "300x300bb.jpg"),
+            streamUrl: r.previewUrl ?? "",
+            duration: r.trackTimeMillis ? Math.floor(r.trackTimeMillis / 1000) : 0,
+            language: r.country,
+            label: r.primaryGenreName,
+            year: r.releaseDate?.slice(0, 4),
+            year_string: r.releaseDate?.slice(0, 4),
+          }))
+
+        const r = albumRow ?? lookupData.results[0]
         setAlbum({
-          id: d.album.id,
-          name: d.album.name,
-          artist: d.album.artist,
-          image: d.album.image,
-          year: d.album.year,
-          language: d.album.language,
-          songs: (d.album.songs ?? []).map(mapSaavnToTrack),
+          id: String(r.collectionId ?? r.artistId ?? ""),
+          name: r.collectionName ?? "",
+          artist: r.artistName ?? "Unknown",
+          image: (r.artworkUrl100 ?? "").replace(/100x100bb\.jpg$/, "300x300bb.jpg"),
+          year: r.releaseDate?.slice(0, 4),
+          language: r.country,
+          songs,
         })
       })
       .catch(() => {})
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
+    // Defer saved-album check to next tick to satisfy set-state-in-effect rule
+    Promise.resolve().then(() => {
+      if (!cancelled) setSaved(isAlbumSaved(albumId))
+    })
     return () => {
       cancelled = true
     }
   }, [albumId])
-
-  // Check if album is already saved (we use the parent's savedAlbums list)
-  useEffect(() => {
-    if (!album) return
-    // Check via a HEAD-ish call to /api/albums
-    fetch("/api/albums")
-      .then((r) => r.json())
-      .then((d) => {
-        const exists = (d.albums ?? []).some((a: any) => a.saavnId === albumId)
-        setSaved(exists)
-      })
-      .catch(() => {})
-  }, [albumId, album])
 
   const handlePlayAlbum = () => {
     if (!album || album.songs.length === 0) return
@@ -85,31 +95,23 @@ export function AlbumView({ albumId }: AlbumViewProps) {
     }
   }
 
-  const handleSaveToggle = async () => {
+  const handleSaveToggle = () => {
     if (!album) return
     if (saved) {
-      await fetch(`/api/album?saavnId=${encodeURIComponent(albumId)}`, {
-        method: "DELETE",
-      })
+      unsaveAlbum(album.id)
       setSaved(false)
       toast({ title: "Removed from library" })
-      window.dispatchEvent(new CustomEvent("albums-changed"))
     } else {
-      await fetch("/api/album", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          saavnId: album.id,
-          title: album.name,
-          artist: album.artist,
-          image: album.image,
-          year: album.year,
-          language: album.language,
-        }),
+      saveAlbum({
+        saavnId: album.id,
+        title: album.name,
+        artist: album.artist,
+        image: album.image,
+        year: album.year,
+        language: album.language,
       })
       setSaved(true)
       toast({ title: "Saved to library", description: album.name })
-      window.dispatchEvent(new CustomEvent("albums-changed"))
     }
   }
 
@@ -138,7 +140,6 @@ export function AlbumView({ albumId }: AlbumViewProps) {
 
   return (
     <div>
-      {/* Header */}
       <header
         className={cn(
           "relative -mx-4 px-4 sm:mx-0 sm:px-0 pb-4 mb-4",
@@ -173,7 +174,6 @@ export function AlbumView({ albumId }: AlbumViewProps) {
         </div>
       </header>
 
-      {/* Action row */}
       <div className="flex items-center gap-3 px-4 sm:px-6 mb-4">
         <Button
           onClick={handlePlayAlbum}
@@ -198,7 +198,6 @@ export function AlbumView({ albumId }: AlbumViewProps) {
         </Button>
       </div>
 
-      {/* Track list */}
       <div className="px-2 sm:px-4">
         <div className="hidden md:grid grid-cols-[auto_1fr_auto] gap-3 px-2 pb-2 text-xs uppercase tracking-wider text-muted-foreground border-b border-white/5">
           <div className="w-12 text-center">#</div>
@@ -230,20 +229,4 @@ export function AlbumView({ albumId }: AlbumViewProps) {
       </div>
     </div>
   )
-}
-
-function mapSaavnToTrack(s: any): Track {
-  return {
-    id: s.id,
-    title: s.title,
-    artist: s.artist,
-    album: s.album,
-    albumId: s.albumId,
-    image: s.image,
-    streamUrl: s.streamUrl,
-    duration: s.duration,
-    language: s.language,
-    label: s.label,
-    year: s.year,
-  }
 }

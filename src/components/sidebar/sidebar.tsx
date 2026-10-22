@@ -11,38 +11,22 @@ import {
   Music2,
   Disc3,
   SlidersHorizontal,
-  X,
 } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
-
-interface Playlist {
-  id: string
-  name: string
-  trackCount?: number
-  coverImage?: string | null
-  mood?: string | null
-}
-
-interface Album {
-  id: string
-  saavnId: string
-  title: string
-  artist: string
-  image?: string | null
-}
+import { createPlaylist, type Playlist, type SavedAlbum } from "@/lib/storage"
 
 export function Sidebar({
   playlists = [],
   savedAlbums = [],
 }: {
   playlists?: Playlist[]
-  savedAlbums?: Album[]
+  savedAlbums?: SavedAlbum[]
 }) {
   const { view, setView, setSidebarOpen, sidebarOpen } = usePlayer()
   const [createOpen, setCreateOpen] = useState(false)
@@ -69,7 +53,6 @@ export function Sidebar({
 
   return (
     <>
-      {/* Mobile overlay */}
       {sidebarOpen && (
         <div
           className="fixed inset-0 bg-black/60 z-40 lg:hidden"
@@ -85,7 +68,6 @@ export function Sidebar({
           sidebarOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        {/* Top: nav buttons */}
         <div className="bg-card rounded-lg p-2 flex flex-col gap-1">
           {navItem(
             view.kind === "home",
@@ -101,7 +83,6 @@ export function Sidebar({
           )}
         </div>
 
-        {/* Library section */}
         <div className="bg-card rounded-lg flex-1 flex flex-col min-h-0">
           <div className="flex items-center justify-between p-3">
             <button
@@ -124,20 +105,18 @@ export function Sidebar({
 
           <ScrollArea className="flex-1 px-2 pb-2 scrollbar-thin">
             <div className="flex flex-col gap-1">
-              {/* Quick "Liked" pseudo-playlist */}
               <SidebarItem
-                active={false}
+                active={view.kind === "library"}
                 icon={
                   <div className="h-12 w-12 rounded-md bg-gradient-to-br from-purple-600 to-pink-500 flex items-center justify-center">
                     <Heart className="h-5 w-5 fill-white text-white" />
                   </div>
                 }
-                title="Liked Songs"
+                title="Liked & Recent"
                 subtitle="Auto-curated"
                 onClick={() => setView({ kind: "library" })}
               />
 
-              {/* Playlists */}
               {playlists.map((p) => (
                 <SidebarItem
                   key={p.id}
@@ -156,14 +135,11 @@ export function Sidebar({
                     </div>
                   }
                   title={p.name}
-                  subtitle={`Playlist • ${p.trackCount ?? 0} songs`}
-                  onClick={() =>
-                    setView({ kind: "playlist", id: p.id })
-                  }
+                  subtitle={`Playlist • ${p.tracks.length} songs`}
+                  onClick={() => setView({ kind: "playlist", id: p.id })}
                 />
               ))}
 
-              {/* Saved albums */}
               {savedAlbums.map((a) => (
                 <SidebarItem
                   key={a.id}
@@ -183,13 +159,10 @@ export function Sidebar({
                   }
                   title={a.title}
                   subtitle={`Album • ${a.artist}`}
-                  onClick={() =>
-                    setView({ kind: "album", id: a.saavnId })
-                  }
+                  onClick={() => setView({ kind: "album", id: a.saavnId })}
                 />
               ))}
 
-              {/* Preferences link */}
               <SidebarItem
                 active={view.kind === "preferences"}
                 icon={
@@ -206,14 +179,9 @@ export function Sidebar({
         </div>
       </aside>
 
-      {/* Create playlist dialog */}
       <CreatePlaylistDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={() => {
-          // Tell the parent to refresh playlists
-          window.dispatchEvent(new CustomEvent("playlists-changed"))
-        }}
       />
     </>
   )
@@ -259,44 +227,21 @@ function SidebarItem({
 function CreatePlaylistDialog({
   open,
   onOpenChange,
-  onCreated,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onCreated: () => void
 }) {
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
-  const [creating, setCreating] = useState(false)
   const { toast } = useToast()
 
-  const handleCreate = async () => {
+  const handleCreate = () => {
     if (!name.trim()) return
-    setCreating(true)
-    try {
-      const res = await fetch("/api/playlists", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description }),
-      })
-      if (!res.ok) throw new Error("Failed to create playlist")
-      toast({
-        title: "Playlist created",
-        description: name,
-      })
-      onCreated()
-      onOpenChange(false)
-      setName("")
-      setDescription("")
-    } catch (e: any) {
-      toast({
-        title: "Failed to create playlist",
-        description: e.message,
-        variant: "destructive",
-      })
-    } finally {
-      setCreating(false)
-    }
+    const p = createPlaylist(name, description)
+    toast({ title: "Playlist created", description: p.name })
+    onOpenChange(false)
+    setName("")
+    setDescription("")
   }
 
   return (
@@ -330,12 +275,11 @@ function CreatePlaylistDialog({
           <Button
             variant="ghost"
             onClick={() => onOpenChange(false)}
-            disabled={creating}
           >
             Cancel
           </Button>
-          <Button onClick={handleCreate} disabled={creating || !name.trim()}>
-            {creating ? "Creating..." : "Create"}
+          <Button onClick={handleCreate} disabled={!name.trim()}>
+            Create
           </Button>
         </DialogFooter>
       </DialogContent>

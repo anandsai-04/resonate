@@ -2,17 +2,19 @@
 
 import { useEffect, useRef } from "react"
 import { usePlayer } from "@/lib/player-store"
+import { recordPlay, getPreferences } from "@/lib/storage"
+import { pickNextTrack, getTasteProfileFromStorage } from "@/lib/recommend"
 import type { Track } from "@/lib/player-store"
 
 /**
  * useAudioEngine
  *
  * Owns the single <audio> element, wires it to the player store.
- * Implements the auto-play-next behaviour:
- *   - when the current track ends, if repeat === "one", restart
- *   - else if there is a next track in queue, play it (handled by store.next())
- *   - else if autoPlayNext is true, call /api/recommend/next and append the
- *     recommended track to the queue, then play it
+ * Implements the auto-play-next behaviour — all client-side, no API calls:
+ *   - record a play to localStorage when a track ends
+ *   - if there's a next track in queue, play it
+ *   - else if autoPlayNext is true, use the recommend algorithm to pick a
+ *     track matching the current theme, append it to the queue, and play
  */
 export function useAudioEngine() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -23,18 +25,7 @@ export function useAudioEngine() {
     audioRef.current.preload = "auto"
   }
 
-  const {
-    currentTrack,
-    isPlaying,
-    volume,
-    muted,
-    progress,
-    repeat,
-    autoPlayNext,
-  } = usePlayer.getState()
-
-  // Subscribe to relevant slices for re-renders
-  const state = usePlayer()
+  const { currentTrack, isPlaying, volume, muted } = usePlayer.getState()
 
   // ---- load new track when currentTrack changes ----
   useEffect(() => {
@@ -46,11 +37,8 @@ export function useAudioEngine() {
       audio.currentTime = 0
     }
     if (isPlaying) {
-      audio.play().catch(() => {
-        // Autoplay may be blocked until user interaction
-      })
+      audio.play().catch(() => {})
     }
-    // No eslint-disable needed: currentTrack?.id is intentional dep
   }, [currentTrack?.id])
 
   // ---- play / pause syncing ----
@@ -84,19 +72,10 @@ export function useAudioEngine() {
     }
     const onEnded = async () => {
       const s = usePlayer.getState()
-      // record listening history (completed)
+
+      // Record to localStorage history
       if (s.currentTrack) {
-        try {
-          await fetch("/api/history", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              saavnId: s.currentTrack.id,
-              completed: true,
-              skipped: false,
-            }),
-          })
-        } catch {}
+        recordPlay(s.currentTrack, { completed: true })
       }
 
       if (s.repeat === "one") {
@@ -105,10 +84,9 @@ export function useAudioEngine() {
         return
       }
 
-      const hasNext =
-        s.shuffle
-          ? s.queue.length > 1
-          : s.queueIndex + 1 < s.queue.length
+      const hasNext = s.shuffle
+        ? s.queue.length > 1
+        : s.queueIndex + 1 < s.queue.length
 
       if (s.repeat === "all" || hasNext) {
         s.next()
@@ -118,15 +96,45 @@ export function useAudioEngine() {
       // Queue exhausted -> try auto-play-next recommendation
       if (s.autoPlayNext && s.currentTrack) {
         try {
-          const exclude = s.queue.map((t) => t.id).join(",")
-          const res = await fetch(
-            `/api/recommend/next?saavnId=${encodeURIComponent(
-              s.currentTrack.id,
-            )}&exclude=${encodeURIComponent(exclude)}`,
-          )
-          const data = await res.json()
-          if (data.track) {
-            s.appendRecommendation(data.track as Track)
+          const prefs = getPreferences()
+          const taste = getTasteProfileFromStorage()
+          const exclude = s.queue.map((t) => t.id)
+          const next = await pickNextTrack({
+            currentSong: {
+              id: s.currentTrack.id,
+              title: s.currentTrack.title,
+              artist: s.currentTrack.artist,
+              album: s.currentTrack.album ?? "",
+              albumId: s.currentTrack.albumId,
+              image: s.currentTrack.image ?? "",
+              streamUrl: s.currentTrack.streamUrl ?? "",
+              duration: s.currentTrack.duration,
+              language: s.currentTrack.language,
+              label: s.currentTrack.label,
+              year: s.currentTrack.year,
+            },
+            taste,
+            discoveryLevel: prefs.discoveryLevel,
+            preferredMoods: prefs.moods as any,
+            preferredLanguages: prefs.languages,
+            excludeIds: [...exclude, ...taste.recentlyPlayedIds],
+          })
+
+          if (next) {
+            const nextTrack: Track = {
+              id: next.id,
+              title: next.title,
+              artist: next.artist,
+              album: next.album,
+              albumId: next.albumId,
+              image: next.image,
+              streamUrl: next.streamUrl,
+              duration: next.duration,
+              language: next.language,
+              label: next.label,
+              year: next.year,
+            }
+            s.appendRecommendation(nextTrack)
           }
         } catch (e) {
           console.error("Auto-play-next failed:", e)
@@ -146,6 +154,4 @@ export function useAudioEngine() {
       audio.removeEventListener("ended", onEnded)
     }
   }, [])
-
-  return audioRef
 }

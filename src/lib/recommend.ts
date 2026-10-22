@@ -1,17 +1,13 @@
 /**
  * Mood / theme extraction & "play next" recommendation engine.
  *
- * The idea: when a playlist ends (or queue is empty), we look at the
- * song that just played, derive a "theme" (mood + tempo + language +
- * genre), and search JioSaavn for tracks that match that theme.
- *
- * The theme is reinforced by the user's recently played history (taste
- * profile) and modulated by the discovery_level preference.
- *
- * Output of `pickNextTrack` is a single track the player can load.
+ * FULLY CLIENT-SIDE — no DB, no API routes needed.
+ * Calls iTunes Search API directly from the browser.
+ * Uses listening history from localStorage to build the taste profile.
  */
 
 import { searchSongs, type SaavnSong } from "./saavn"
+import { getHistory, type HistoryEntry } from "./storage"
 
 // ---------------------------------------------------------------------------
 // Mood taxonomy
@@ -51,7 +47,7 @@ export const MOODS: Mood[] = [
 
 // Keywords that hint at a mood. Used both ways: when classifying a song
 // (title/album/language contains a keyword) and when building a search
-// query (we feed these terms to JioSaavn search).
+// query (we feed these terms to iTunes search).
 const MOOD_KEYWORDS: Record<Mood, string[]> = {
   energetic: ["dance", "energy", "power", "anthem", "hype", "workout", "running"],
   happy: ["happy", "feel good", "smile", "sunny", "joy", "celebration"],
@@ -63,7 +59,6 @@ const MOOD_KEYWORDS: Record<Mood, string[]> = {
   soulful: ["soulful", "sufi", "ghazal", "qawwali", "spiritual", "bhajan", "devotional"],
 }
 
-// Languages we recognise for the taste profile
 export const LANGUAGES = [
   "hindi",
   "english",
@@ -82,18 +77,12 @@ export const LANGUAGES = [
 // ---------------------------------------------------------------------------
 
 export interface SongTheme {
-  moods: Mood[]      // ranked, highest first
+  moods: Mood[]
   tempo: "slow" | "mid" | "fast"
   languages: string[]
-  seedKeywords: string[] // used to build searches
+  seedKeywords: string[]
 }
 
-/**
- * Derive a theme from a song. We use a hybrid approach:
- *   1. Keyword matching against title + album + label
- *   2. Duration heuristics (very short => interlude/lofi, very long => epic)
- *   3. Language from the song's `language` field (cleaned)
- */
 export function extractTheme(song: {
   title: string
   album?: string | null
@@ -111,10 +100,8 @@ export function extractTheme(song: {
     }
     if (score > 0) moods.push({ mood, score })
   }
-  // Sort by score desc, then by mood alphabetical for stability
   moods.sort((a, b) => b.score - a.score || a.mood.localeCompare(b.mood))
 
-  // Tempo from duration (very rough heuristic)
   const dur = song.duration
   let tempo: "slow" | "mid" | "fast" = "mid"
   if (dur > 0) {
@@ -122,7 +109,6 @@ export function extractTheme(song: {
     else if (dur > 300) tempo = "slow"
   }
 
-  // Language: saavn returns "hindi" / "english" / etc.
   const languages = (song.language ?? "")
     .toLowerCase()
     .split(/[,/]/)
@@ -143,40 +129,32 @@ export function extractTheme(song: {
 }
 
 // ---------------------------------------------------------------------------
-// Taste profile from history
+// Taste profile from localStorage history
 // ---------------------------------------------------------------------------
 
 export interface TasteProfile {
-  topMoods: Mood[]      // ranked
+  topMoods: Mood[]
   topLanguages: string[]
   topArtists: string[]
-  recentlyPlayedIds: string[] // last N song ids (saavn ids)
+  recentlyPlayedIds: string[]
 }
 
-export function buildTasteProfile(history: Array<{
-  track: {
-    saavnId: string
-    artist: string
-    language?: string | null
-    mood?: string | null
-  }
-}>): TasteProfile {
+export function buildTasteProfile(history: HistoryEntry[]): TasteProfile {
   const moodCount: Record<string, number> = {}
   const langCount: Record<string, number> = {}
   const artistCount: Record<string, number> = {}
   const recent: string[] = []
 
   for (const entry of history) {
-    const t = entry.track
-    if (t.mood) moodCount[t.mood] = (moodCount[t.mood] ?? 0) + 1
-    if (t.language) {
-      for (const l of t.language.toLowerCase().split(/[,/]/)) {
+    if (entry.mood) moodCount[entry.mood] = (moodCount[entry.mood] ?? 0) + 1
+    if (entry.language) {
+      for (const l of entry.language.toLowerCase().split(/[,/]/)) {
         const ll = l.trim()
         if (ll) langCount[ll] = (langCount[ll] ?? 0) + 1
       }
     }
-    if (t.artist) artistCount[t.artist] = (artistCount[t.artist] ?? 0) + 1
-    if (!recent.includes(t.saavnId)) recent.push(t.saavnId)
+    if (entry.artist) artistCount[entry.artist] = (artistCount[entry.artist] ?? 0) + 1
+    if (!recent.includes(entry.trackId)) recent.push(entry.trackId)
   }
 
   const topMoods = Object.entries(moodCount)
@@ -209,24 +187,12 @@ export function buildTasteProfile(history: Array<{
 export interface PlayNextInput {
   currentSong?: SaavnSong | null
   taste: TasteProfile
-  discoveryLevel: number // 0..1
+  discoveryLevel: number
   preferredMoods: Mood[]
   preferredLanguages: string[]
-  excludeIds: string[] // saavn ids already in queue/history this session
+  excludeIds: string[]
 }
 
-/**
- * Pick the next track to play when the queue is empty.
- *
- * Strategy:
- *  1. Build a search query from the current song's theme (mood + a
- *     keyword), biased toward the user's preferred languages and
- *     taste profile.
- *  2. If discovery_level is low -> keep close to current artist/album.
- *     If high -> pick from a wider mood pool (more diverse).
- *  3. Filter out recently played songs, then pick a random eligible
- *     track weighted toward the front of results (more relevant).
- */
 export async function pickNextTrack(input: PlayNextInput): Promise<SaavnSong | null> {
   const {
     currentSong,
@@ -237,21 +203,17 @@ export async function pickNextTrack(input: PlayNextInput): Promise<SaavnSong | n
     excludeIds,
   } = input
 
-  // Compose search query
   const theme = currentSong ? extractTheme(currentSong) : null
 
-  // Choose a mood for the search
   const moodPool: Mood[] = []
   if (theme && theme.moods.length > 0) moodPool.push(theme.moods[0])
   moodPool.push(...preferredMoods, ...taste.topMoods)
   if (discoveryLevel > 0.5) {
-    // Add some unrelated moods to widen exploration
     for (const m of MOODS) if (!moodPool.includes(m)) moodPool.push(m)
   }
   const chosenMood = moodPool[0] ?? "chill"
   const moodKeyword = MOOD_KEYWORDS[chosenMood]?.[0] ?? "music"
 
-  // Build query: "<keyword>" OR "<current artist>" if discovery low
   const parts: string[] = [moodKeyword]
   if (currentSong && discoveryLevel < 0.4) {
     parts.push(currentSong.artist.split(",")[0])
@@ -260,16 +222,13 @@ export async function pickNextTrack(input: PlayNextInput): Promise<SaavnSong | n
   }
   const query = parts.slice(0, 2).join(" ")
 
-  // Preferred language: use taste's top language if present, else pref
   const lang = taste.topLanguages[0] ?? preferredLanguages[0] ?? "hindi"
 
   const results = await searchSongs(`${query} ${lang}`, 20)
 
-  // Filter out recently played
   const eligible = results.filter((s) => !excludeIds.includes(s.id))
   if (eligible.length === 0) return results[0] ?? null
 
-  // Weighted random pick: weight = 1 / (index + 1)
   const weights = eligible.map((_, i) => 1 / (i + 1))
   const total = weights.reduce((a, b) => a + b, 0)
   let r = Math.random() * total
@@ -278,4 +237,12 @@ export async function pickNextTrack(input: PlayNextInput): Promise<SaavnSong | n
     if (r <= 0) return eligible[i]
   }
   return eligible[0]
+}
+
+// ---------------------------------------------------------------------------
+// Convenience: build taste profile from localStorage
+// ---------------------------------------------------------------------------
+
+export function getTasteProfileFromStorage(): TasteProfile {
+  return buildTasteProfile(getHistory())
 }

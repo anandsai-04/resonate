@@ -9,16 +9,11 @@ import { useState, useEffect } from "react"
 import type { SaavnSong } from "@/lib/saavn"
 import { usePlayer } from "@/lib/player-store"
 import { Skeleton } from "@/components/ui/skeleton"
+import type { SavedAlbum } from "@/lib/storage"
 
 interface HomeViewProps {
   recent: Track[]
-  savedAlbums: Array<{
-    id: string
-    saavnId: string
-    title: string
-    artist: string
-    image?: string | null
-  }>
+  savedAlbums: SavedAlbum[]
 }
 
 export function HomeView({ recent, savedAlbums }: HomeViewProps) {

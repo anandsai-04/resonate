@@ -129,7 +129,6 @@ async function itunesFetch<T>(path: string): Promise<T> {
   const url = `${ITUNES_BASE}${path}`
   const res = await fetch(url, {
     headers: { "User-Agent": "ResonatePlayer/1.0" },
-    next: { revalidate: 3600 },
   })
   if (!res.ok) throw new Error(`iTunes ${res.status}: ${res.statusText}`)
   return (await res.json()) as T
@@ -210,6 +209,8 @@ export async function getLyrics(songId: string): Promise<SaavnLyrics> {
   try {
     const song = await getSongDetails(songId)
     if (!song) return {}
+
+    // Try exact match first
     const params = new URLSearchParams({
       artist_name: song.artist.split(",")[0].trim(),
       track_name: song.title,
@@ -218,30 +219,32 @@ export async function getLyrics(songId: string): Promise<SaavnLyrics> {
     const url = `${LRCLIB_BASE}/get?${params.toString()}`
     const res = await fetch(url, {
       headers: { "User-Agent": "ResonatePlayer/1.0" },
-      next: { revalidate: 86400 },
     })
-    if (!res.ok) {
-      // Fall back to search
-      const searchUrl = `${LRCLIB_BASE}/search?q=${encodeURIComponent(
-        `${song.artist} ${song.title}`,
-      )}`
-      const sres = await fetch(searchUrl, {
-        headers: { "User-Agent": "ResonatePlayer/1.0" },
-        next: { revalidate: 86400 },
-      })
-      if (!sres.ok) return {}
-      const arr = (await sres.json()) as any[]
-      if (!Array.isArray(arr) || arr.length === 0) return {}
-      const hit = arr[0]
-      return {
-        syncLyrics: hit.syncedLyrics ?? undefined,
-        plainLyrics: hit.plainLyrics ?? undefined,
+    if (res.ok) {
+      const data: any = await res.json()
+      if (data?.plainLyrics || data?.syncedLyrics) {
+        return {
+          syncLyrics: data.syncedLyrics ?? undefined,
+          plainLyrics: data.plainLyrics ?? undefined,
+        }
       }
     }
-    const data = await res.json()
+
+    // Fall back to search (more lenient)
+    const searchUrl = `${LRCLIB_BASE}/search?q=${encodeURIComponent(
+      `${song.artist} ${song.title}`,
+    )}`
+    const sres = await fetch(searchUrl, {
+      headers: { "User-Agent": "ResonatePlayer/1.0" },
+    })
+    if (!sres.ok) return {}
+    const arr = (await sres.json()) as any[]
+    if (!Array.isArray(arr) || arr.length === 0) return {}
+    // Find the first hit that actually has lyrics
+    const hit = arr.find((h) => h.plainLyrics || h.syncedLyrics) ?? arr[0]
     return {
-      syncLyrics: data.syncedLyrics ?? undefined,
-      plainLyrics: data.plainLyrics ?? undefined,
+      syncLyrics: hit.syncedLyrics ?? undefined,
+      plainLyrics: hit.plainLyrics ?? undefined,
     }
   } catch {
     return {}

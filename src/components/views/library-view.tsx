@@ -1,23 +1,14 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import type { Track } from "@/lib/player-store"
 import { TrackCard } from "@/components/track/track-card"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Disc3, Heart, Music2, ListMusic } from "lucide-react"
 import { usePlayer } from "@/lib/player-store"
-
-interface Album {
-  id: string
-  saavnId: string
-  title: string
-  artist: string
-  image?: string | null
-  year?: string | null
-}
+import type { SavedAlbum } from "@/lib/storage"
 
 interface LibraryViewProps {
-  savedAlbums: Album[]
+  savedAlbums: SavedAlbum[]
   recent: Track[]
 }
 
@@ -32,11 +23,10 @@ export function LibraryView({ savedAlbums, recent }: LibraryViewProps) {
           <Music2 className="h-7 w-7 text-primary" /> Your Library
         </h1>
         <p className="text-muted-foreground text-sm">
-          Albums you've saved, songs you've recently played.
+          Albums you&apos;ve saved, songs you&apos;ve recently played.
         </p>
       </header>
 
-      {/* Tabs */}
       <div className="flex gap-2 border-b border-white/5">
         <TabButton active={tab === "albums"} onClick={() => setTab("albums")}>
           <Disc3 className="h-4 w-4" /> Saved Albums ({savedAlbums.length})
@@ -51,7 +41,7 @@ export function LibraryView({ savedAlbums, recent }: LibraryViewProps) {
           {savedAlbums.length === 0 ? (
             <div className="col-span-full text-center py-12 text-muted-foreground">
               <Disc3 className="h-12 w-12 mx-auto mb-3 opacity-50" />
-              No saved albums yet. Search for one and tap "Save".
+              No saved albums yet. Search for one and tap &quot;Save&quot;.
             </div>
           ) : (
             savedAlbums.map((a) => (

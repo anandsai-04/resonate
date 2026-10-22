@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
@@ -17,25 +17,17 @@ import {
   Brain,
   Globe,
   Music4,
-  User as UserIcon,
   Plus,
   X,
 } from "lucide-react"
-import { useRouter } from "next/navigation"
-import { signOut } from "next-auth/react"
+import {
+  getPreferences,
+  savePreferences,
+  resetPreferences,
+  type Preferences,
+} from "@/lib/storage"
 
-interface Prefs {
-  genres: string[]
-  languages: string[]
-  artists: string[]
-  albums: string[]
-  moods: string[]
-  discoveryLevel: number
-  autoPlayNext: boolean
-  explicitFilter: boolean
-}
-
-const DEFAULT_PREFS: Prefs = {
+const DEFAULT_PREFS: Preferences = {
   genres: [],
   languages: [],
   artists: [],
@@ -52,52 +44,21 @@ const COMMON_GENRES = [
 ]
 
 export function PreferencesView() {
-  const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS)
-  const [loading, setLoading] = useState(true)
+  const [prefs, setPrefs] = useState<Preferences>(() => getPreferences())
   const [saving, setSaving] = useState(false)
   const [newArtist, setNewArtist] = useState("")
   const [newGenre, setNewGenre] = useState("")
-  const [userEmail, setUserEmail] = useState<string | null>(null)
   const { toast } = useToast()
   const setPreferences = usePlayer((s) => s.setPreferences)
-  const router = useRouter()
 
-  useEffect(() => {
-    fetch("/api/preferences")
-      .then(async (r) => {
-        if (r.status === 401) {
-          router.push("/auth/signin")
-          return null
-        }
-        return r.json()
-      })
-      .then((d) => {
-        if (!d) return
-        setPrefs({
-          genres: d.genres ?? [],
-          languages: d.languages ?? [],
-          artists: d.artists ?? [],
-          albums: d.albums ?? [],
-          moods: d.moods ?? [],
-          discoveryLevel: typeof d.discoveryLevel === "number" ? d.discoveryLevel : 0.3,
-          autoPlayNext: d.autoPlayNext ?? true,
-          explicitFilter: d.explicitFilter ?? false,
-        })
-        setPreferences({
-          preferredMoods: d.moods ?? [],
-          preferredLangs: d.languages ?? [],
-          discoveryLevel: typeof d.discoveryLevel === "number" ? d.discoveryLevel : 0.3,
-          autoPlayNext: d.autoPlayNext ?? true,
-        })
-      })
-      .finally(() => setLoading(false))
-
-    // Fetch user info for the account section
-    fetch("/api/init")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d?.user?.email && setUserEmail(d.user.email))
-      .catch(() => {})
-  }, [setPreferences, router])
+  const applyToPlayer = (p: Preferences) => {
+    setPreferences({
+      preferredMoods: p.moods,
+      preferredLangs: p.languages,
+      discoveryLevel: p.discoveryLevel,
+      autoPlayNext: p.autoPlayNext,
+    })
+  }
 
   const toggleMood = (mood: Mood) => {
     setPrefs((p) => ({
@@ -148,51 +109,21 @@ export function PreferencesView() {
     setNewGenre("")
   }
 
-  const handleSave = async () => {
+  const handleSave = () => {
     setSaving(true)
-    try {
-      await fetch("/api/preferences", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(prefs),
-      })
-      setPreferences({
-        preferredMoods: prefs.moods,
-        preferredLangs: prefs.languages,
-        discoveryLevel: prefs.discoveryLevel,
-        autoPlayNext: prefs.autoPlayNext,
-      })
-      toast({ title: "Preferences saved" })
-    } catch (e: any) {
-      toast({
-        title: "Failed to save",
-        description: e.message,
-        variant: "destructive",
-      })
-    } finally {
+    savePreferences(prefs)
+    applyToPlayer(prefs)
+    setTimeout(() => {
       setSaving(false)
-    }
+      toast({ title: "Preferences saved" })
+    }, 300)
   }
 
   const handleReset = () => {
     setPrefs(DEFAULT_PREFS)
-  }
-
-  if (loading) {
-    return (
-      <div className="space-y-4">
-        {Array.from({ length: 3 }).map((_, i) => (
-          <Card key={i}>
-            <CardHeader>
-              <div className="h-6 w-1/3 bg-white/5 rounded animate-pulse" />
-            </CardHeader>
-            <CardContent>
-              <div className="h-20 bg-white/5 rounded animate-pulse" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    )
+    resetPreferences()
+    applyToPlayer(DEFAULT_PREFS)
+    toast({ title: "Reset to defaults" })
   }
 
   return (
@@ -208,30 +139,6 @@ export function PreferencesView() {
         </p>
       </header>
 
-      {/* Account section */}
-      {userEmail && (
-        <Card className="bg-card/60 backdrop-blur">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <UserIcon className="h-4 w-4 text-primary" /> Account
-            </CardTitle>
-            <CardDescription>
-              You&apos;re signed in as <span className="text-foreground font-medium">{userEmail}</span>
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => signOut({ callbackUrl: "/auth/signin" })}
-            >
-              Sign out
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Auto-play-next toggle */}
       <Card className="bg-card/60 backdrop-blur">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -255,7 +162,6 @@ export function PreferencesView() {
         </CardContent>
       </Card>
 
-      {/* Discovery slider */}
       <Card className="bg-card/60 backdrop-blur">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -284,7 +190,6 @@ export function PreferencesView() {
         </CardContent>
       </Card>
 
-      {/* Mood preferences */}
       <Card className="bg-card/60 backdrop-blur">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -318,7 +223,6 @@ export function PreferencesView() {
         </CardContent>
       </Card>
 
-      {/* Language preferences */}
       <Card className="bg-card/60 backdrop-blur">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -351,7 +255,6 @@ export function PreferencesView() {
         </CardContent>
       </Card>
 
-      {/* Genre preferences */}
       <Card className="bg-card/60 backdrop-blur">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -380,7 +283,6 @@ export function PreferencesView() {
                 </button>
               )
             })}
-            {/* Custom genres */}
             {prefs.genres
               .filter((g) => !COMMON_GENRES.includes(g))
               .map((g) => (
@@ -410,7 +312,6 @@ export function PreferencesView() {
         </CardContent>
       </Card>
 
-      {/* Artist preferences */}
       <Card className="bg-card/60 backdrop-blur">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -457,7 +358,6 @@ export function PreferencesView() {
         </CardContent>
       </Card>
 
-      {/* Action row */}
       <div className="flex items-center gap-2 pt-2 sticky bottom-24 bg-background/80 backdrop-blur py-3 -mx-2 px-2 border-t border-white/5">
         <Button onClick={handleSave} disabled={saving}>
           <Save className="h-4 w-4 mr-1" />

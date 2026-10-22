@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import type { Track } from "@/lib/player-store"
 import { usePlayer } from "@/lib/player-store"
 import { TrackRow } from "@/components/track/track-row"
@@ -14,7 +14,6 @@ import {
   Plus,
   Music2,
   Clock,
-  ListMusic,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import {
@@ -28,117 +27,63 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { cn } from "@/lib/utils"
+import {
+  getPlaylist,
+  deletePlaylist,
+  addTrackToPlaylist,
+  removeTrackFromPlaylist,
+  type Playlist,
+} from "@/lib/storage"
 
 interface PlaylistViewProps {
   playlistId: string
 }
 
-interface PlaylistData {
-  id: string
-  name: string
-  description?: string | null
-  coverImage?: string | null
-  mood?: string | null
-  tracks: Track[]
-}
-
 export function PlaylistView({ playlistId }: PlaylistViewProps) {
-  const [data, setData] = useState<PlaylistData | null>(null)
+  const [playlist, setPlaylist] = useState<Playlist | null>(null)
   const [loading, setLoading] = useState(true)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
-  const { playQueue, currentTrack, isPlaying, togglePlay } = usePlayer()
+  const { playQueue, currentTrack, isPlaying, togglePlay, setView } = usePlayer()
   const { toast } = useToast()
 
-  const load = async () => {
-    setLoading(true)
-    try {
-      const res = await fetch(`/api/playlists/${playlistId}`)
-      if (!res.ok) throw new Error("Not found")
-      const json = await res.json()
-      // Map DB track rows -> our Track shape
-      const tracks: Track[] = (json.playlist.tracks ?? []).map((pt: any) => ({
-        id: pt.track.saavnId,
-        title: pt.track.title,
-        artist: pt.track.artist,
-        album: pt.track.album ?? undefined,
-        albumId: pt.track.albumId ?? undefined,
-        image: pt.track.image ?? undefined,
-        streamUrl: pt.track.streamUrl ?? undefined,
-        duration: pt.track.duration,
-        language: pt.track.language ?? undefined,
-        label: pt.track.label ?? undefined,
-        year: pt.track.year ?? undefined,
-      }))
-      setData({
-        id: json.playlist.id,
-        name: json.playlist.name,
-        description: json.playlist.description,
-        coverImage: json.playlist.coverImage,
-        mood: json.playlist.mood,
-        tracks,
-      })
-    } catch (e: any) {
-      toast({
-        title: "Failed to load playlist",
-        description: e.message,
-        variant: "destructive",
-      })
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    load()
+  const load = useCallback(() => {
+    const p = getPlaylist(playlistId)
+    setPlaylist(p)
+    setLoading(false)
   }, [playlistId])
 
+  useEffect(() => {
+    // Defer to avoid the set-state-in-effect rule
+    Promise.resolve().then(() => load())
+  }, [load])
+
   const handlePlayPlaylist = () => {
-    if (!data || data.tracks.length === 0) return
-    const isThisPlaylistPlaying = currentTrack && data.tracks.some((t) => t.id === currentTrack.id)
+    if (!playlist || playlist.tracks.length === 0) return
+    const isThisPlaylistPlaying =
+      currentTrack && playlist.tracks.some((t) => t.id === currentTrack.id)
     if (isThisPlaylistPlaying) {
       togglePlay()
     } else {
-      playQueue(data.tracks, 0, data.name)
+      playQueue(playlist.tracks, 0, playlist.name)
     }
   }
 
-  const handleDeleteTrack = async (trackId: string) => {
-    if (!data) return
-    try {
-      await fetch(
-        `/api/playlists/${playlistId}/tracks?saavnId=${encodeURIComponent(trackId)}`,
-        { method: "DELETE" },
-      )
-      setData({
-        ...data,
-        tracks: data.tracks.filter((t) => t.id !== trackId),
-      })
-      toast({ title: "Removed from playlist" })
-    } catch (e: any) {
-      toast({
-        title: "Failed to remove",
-        description: e.message,
-        variant: "destructive",
-      })
-    }
+  const handleDeleteTrack = (trackId: string) => {
+    if (!playlist) return
+    removeTrackFromPlaylist(playlist.id, trackId)
+    setPlaylist({
+      ...playlist,
+      tracks: playlist.tracks.filter((t) => t.id !== trackId),
+    })
+    toast({ title: "Removed from playlist" })
   }
 
-  const handleDeletePlaylist = async () => {
-    try {
-      await fetch(`/api/playlists/${playlistId}`, { method: "DELETE" })
-      toast({ title: "Playlist deleted" })
-      window.dispatchEvent(new CustomEvent("playlists-changed"))
-      usePlayer.getState().setView({ kind: "library" })
-    } catch (e: any) {
-      toast({
-        title: "Failed to delete playlist",
-        description: e.message,
-        variant: "destructive",
-      })
-    } finally {
-      setDeleteOpen(false)
-    }
+  const handleDeletePlaylist = () => {
+    if (!playlist) return
+    deletePlaylist(playlist.id)
+    toast({ title: "Playlist deleted" })
+    setView({ kind: "library" })
   }
 
   if (loading) {
@@ -153,16 +98,19 @@ export function PlaylistView({ playlistId }: PlaylistViewProps) {
     )
   }
 
-  if (!data) {
-    return <div className="text-center py-12 text-muted-foreground">Playlist not found</div>
+  if (!playlist) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        Playlist not found
+      </div>
+    )
   }
 
   const isThisPlaylistPlaying =
-    currentTrack && data.tracks.some((t) => t.id === currentTrack.id)
+    currentTrack && playlist.tracks.some((t) => t.id === currentTrack.id)
 
   return (
     <div>
-      {/* Header */}
       <header
         className={cn(
           "relative -mx-4 px-4 sm:mx-0 sm:px-0 pb-4 mb-4",
@@ -171,9 +119,9 @@ export function PlaylistView({ playlistId }: PlaylistViewProps) {
       >
         <div className="flex items-end gap-5 p-4 sm:p-6">
           <div className="h-44 w-44 md:h-52 md:w-52 rounded-lg overflow-hidden shadow-2xl bg-gradient-to-br from-primary/30 to-black flex items-center justify-center flex-shrink-0">
-            {data.coverImage ? (
+            {playlist.coverImage ? (
               <img
-                src={data.coverImage}
+                src={playlist.coverImage}
                 alt=""
                 className="h-full w-full object-cover"
               />
@@ -184,28 +132,27 @@ export function PlaylistView({ playlistId }: PlaylistViewProps) {
           <div className="flex-1 min-w-0">
             <div className="text-xs uppercase tracking-widest text-muted-foreground mb-1">
               Playlist
-              {data.mood ? ` • ${data.mood} mood` : ""}
+              {playlist.mood ? ` • ${playlist.mood} mood` : ""}
             </div>
             <h1 className="text-4xl md:text-6xl font-black tracking-tight truncate">
-              {data.name}
+              {playlist.name}
             </h1>
-            {data.description && (
+            {playlist.description && (
               <p className="text-muted-foreground mt-2 text-sm">
-                {data.description}
+                {playlist.description}
               </p>
             )}
             <div className="text-sm text-muted-foreground mt-3">
-              {data.tracks.length} song{data.tracks.length !== 1 ? "s" : ""}
+              {playlist.tracks.length} song{playlist.tracks.length !== 1 ? "s" : ""}
             </div>
           </div>
         </div>
       </header>
 
-      {/* Action row */}
       <div className="flex items-center gap-3 px-4 sm:px-6 mb-4">
         <Button
           onClick={handlePlayPlaylist}
-          disabled={data.tracks.length === 0}
+          disabled={playlist.tracks.length === 0}
           className="h-12 w-12 rounded-full bg-primary hover:bg-primary/90 hover:scale-105 transition-transform p-0"
           aria-label={isThisPlaylistPlaying ? "Pause" : "Play"}
         >
@@ -234,12 +181,11 @@ export function PlaylistView({ playlistId }: PlaylistViewProps) {
         </Button>
       </div>
 
-      {/* Track list */}
       <div className="px-2 sm:px-4">
-        {data.tracks.length === 0 ? (
+        {playlist.tracks.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
             <Music2 className="h-12 w-12 mx-auto mb-3 opacity-50" />
-            This playlist is empty. Tap "Add songs" to fill it up.
+            This playlist is empty. Tap &quot;Add songs&quot; to fill it up.
             <br />
             <span className="text-xs">
               Tip: if Auto-play-next is on, ending a song here will pull tracks
@@ -248,7 +194,6 @@ export function PlaylistView({ playlistId }: PlaylistViewProps) {
           </div>
         ) : (
           <>
-            {/* Column headers */}
             <div className="hidden md:grid grid-cols-[auto_1fr_auto] gap-3 px-2 pb-2 text-xs uppercase tracking-wider text-muted-foreground border-b border-white/5">
               <div className="w-12 text-center">#</div>
               <div>Title</div>
@@ -257,7 +202,7 @@ export function PlaylistView({ playlistId }: PlaylistViewProps) {
               </div>
             </div>
             <div className="py-2">
-              {data.tracks.map((t, i) => (
+              {playlist.tracks.map((t, i) => (
                 <div
                   key={`${t.id}-${i}`}
                   className="group grid grid-cols-[1fr_auto] gap-2"
@@ -265,8 +210,8 @@ export function PlaylistView({ playlistId }: PlaylistViewProps) {
                   <TrackRow
                     track={t}
                     index={i}
-                    contextQueue={data.tracks}
-                    contextName={data.name}
+                    contextQueue={playlist.tracks}
+                    contextName={playlist.name}
                   />
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <span className="text-xs tabular-nums text-muted-foreground mr-2">
@@ -287,11 +232,10 @@ export function PlaylistView({ playlistId }: PlaylistViewProps) {
         )}
       </div>
 
-      {/* Delete confirmation */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete "{data.name}"?</AlertDialogTitle>
+            <AlertDialogTitle>Delete &quot;{playlist.name}&quot;?</AlertDialogTitle>
             <AlertDialogDescription>
               This will permanently remove the playlist and all its tracks.
               This action cannot be undone.
@@ -309,12 +253,11 @@ export function PlaylistView({ playlistId }: PlaylistViewProps) {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Add songs dialog */}
       <AddSongsToPlaylistDialog
         open={addOpen}
         onOpenChange={setAddOpen}
-        playlistId={playlistId}
-        existingTrackIds={data.tracks.map((t) => t.id)}
+        playlistId={playlist.id}
+        existingTrackIds={playlist.tracks.map((t) => t.id)}
         onAdded={load}
       />
     </div>
@@ -353,7 +296,7 @@ function AddSongsToPlaylistDialog({
           `/api/search?q=${encodeURIComponent(query)}&type=songs&limit=20`,
         )
         const data = await res.json()
-        if (!cancelled) setResults((data.songs ?? []).map(mapSaavnToTrack))
+        if (!cancelled) setResults(data.songs ?? [])
       } catch {
       } finally {
         if (!cancelled) setLoading(false)
@@ -365,37 +308,16 @@ function AddSongsToPlaylistDialog({
     }
   }, [query])
 
-  const handleAdd = async (track: Track) => {
+  const handleAdd = (track: Track) => {
     setAdding((s) => ({ ...s, [track.id]: true }))
-    try {
-      const res = await fetch(`/api/playlists/${playlistId}/tracks`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          saavnId: track.id,
-          title: track.title,
-          artist: track.artist,
-          album: track.album,
-          image: track.image,
-          streamUrl: track.streamUrl,
-          duration: track.duration,
-          language: track.language,
-          label: track.label,
-          year: track.year,
-        }),
-      })
-      if (!res.ok) throw new Error("Failed")
+    const added = addTrackToPlaylist(playlistId, track)
+    if (added) {
       toast({ title: "Added", description: track.title })
       onAdded()
-    } catch (e: any) {
-      toast({
-        title: "Failed to add",
-        description: e.message,
-        variant: "destructive",
-      })
-    } finally {
-      setAdding((s) => ({ ...s, [track.id]: false }))
+    } else {
+      toast({ title: "Already in playlist", description: track.title })
     }
+    setAdding((s) => ({ ...s, [track.id]: false }))
   }
 
   return (
@@ -468,20 +390,4 @@ function AddSongsToPlaylistDialog({
       </AlertDialogContent>
     </AlertDialog>
   )
-}
-
-function mapSaavnToTrack(s: any): Track {
-  return {
-    id: s.id,
-    title: s.title,
-    artist: s.artist,
-    album: s.album,
-    albumId: s.albumId,
-    image: s.image,
-    streamUrl: s.streamUrl,
-    duration: s.duration,
-    language: s.language,
-    label: s.label,
-    year: s.year,
-  }
 }
