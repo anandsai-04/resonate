@@ -285,11 +285,11 @@ function AddSongsToPlaylistDialog({
 
   useEffect(() => {
     if (!query.trim()) {
-      setResults([])
+      Promise.resolve().then(() => setResults([]))
       return
     }
     let cancelled = false
-    setLoading(true)
+    Promise.resolve().then(() => { if (!cancelled) setLoading(true) })
     const t = setTimeout(async () => {
       try {
         const res = await fetch(

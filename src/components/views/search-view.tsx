@@ -20,12 +20,14 @@ export function SearchView() {
   // Debounced search
   useEffect(() => {
     if (!query.trim()) {
-      setSongs([])
-      setAlbums([])
+      Promise.resolve().then(() => {
+        setSongs([])
+        setAlbums([])
+      })
       return
     }
     let cancelled = false
-    setLoading(true)
+    Promise.resolve().then(() => { if (!cancelled) setLoading(true) })
     const t = setTimeout(async () => {
       try {
         const res = await fetch(

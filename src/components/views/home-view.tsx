@@ -26,7 +26,7 @@ export function HomeView({ recent, savedAlbums }: HomeViewProps) {
   // Fetch a small set of trending/popular songs on mount
   useEffect(() => {
     let cancelled = false
-    setLoadingTrending(true)
+    Promise.resolve().then(() => { if (!cancelled) setLoadingTrending(true) })
     fetch("/api/search?q=top%20hits&type=songs&limit=12")
       .then((r) => r.json())
       .then((d) => {
@@ -34,7 +34,7 @@ export function HomeView({ recent, savedAlbums }: HomeViewProps) {
         const songs: Track[] = (d.songs ?? []).map(mapSaavnToTrack)
         setTrending(songs)
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => !cancelled && setLoadingTrending(false))
     return () => {
       cancelled = true
@@ -118,16 +118,16 @@ export function HomeView({ recent, savedAlbums }: HomeViewProps) {
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
           {loadingTrending
             ? Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="aspect-square rounded-lg" />
-              ))
+              <Skeleton key={i} className="aspect-square rounded-lg" />
+            ))
             : trending.slice(0, 12).map((t) => (
-                <TrackCard
-                  key={t.id}
-                  track={t}
-                  contextQueue={trending}
-                  contextName="Trending"
-                />
-              ))}
+              <TrackCard
+                key={t.id}
+                track={t}
+                contextQueue={trending}
+                contextName="Trending"
+              />
+            ))}
         </div>
       </section>
 

@@ -7,19 +7,9 @@ import { pickNextTrack, getTasteProfileFromStorage } from "@/lib/recommend"
 import { getSongDetails } from "@/lib/saavn"
 import type { Track } from "@/lib/player-store"
 
-/**
- * useAudioEngine
- *
- * Owns the single <audio> element, wires it to the player store.
- * Implements:
- *   - lazy stream URL fetching (for Piped API where search doesn't return URLs)
- *   - auto-play-next: when track ends, pick next based on mood/taste
- *   - records plays to localStorage history
- */
 export function useAudioEngine() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
-  // Create the audio element in an effect (not during render)
   useEffect(() => {
     if (typeof window !== "undefined" && !audioRef.current) {
       audioRef.current = new Audio()
@@ -32,17 +22,15 @@ export function useAudioEngine() {
   const volume = usePlayer((s) => s.volume)
   const muted = usePlayer((s) => s.muted)
 
-  // ---- fetch stream URL if missing (Piped API needs this) ----
+  // Fetch stream URL if missing (Piped API needs this)
   useEffect(() => {
-    const audio = audioRef.current
-    if (!audio || !currentTrack) return
-    if (currentTrack.streamUrl) return // Already has URL
+    if (!currentTrack) return
+    if (currentTrack.streamUrl) return
 
     let cancelled = false
     getSongDetails(currentTrack.id)
       .then((details) => {
         if (cancelled || !details?.streamUrl) return
-        // Update the current track and queue with the fetched URL
         const state = usePlayer.getState()
         const updatedTrack: Track = {
           ...currentTrack,
@@ -58,12 +46,6 @@ export function useAudioEngine() {
             t.id === currentTrack.id ? updatedTrack : t
           ),
         })
-        // If we're supposed to be playing, start now
-        if (usePlayer.getState().isPlaying) {
-          audio.src = updatedTrack.streamUrl
-          audio.currentTime = 0
-          audio.play().catch(() => { })
-        }
       })
       .catch((e) => console.error("Failed to fetch stream URL:", e))
 
@@ -72,11 +54,11 @@ export function useAudioEngine() {
     }
   }, [currentTrack?.id])
 
-  // ---- load new track when currentTrack changes ----
+  // Load new track when currentTrack changes
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
-    if (!currentTrack?.streamUrl) return // Wait for URL to be fetched
+    if (!currentTrack?.streamUrl) return
     if (audio.src !== currentTrack.streamUrl) {
       audio.src = currentTrack.streamUrl
       audio.currentTime = 0
@@ -86,7 +68,7 @@ export function useAudioEngine() {
     }
   }, [currentTrack?.id, currentTrack?.streamUrl])
 
-  // ---- play / pause syncing ----
+  // Play / pause syncing
   useEffect(() => {
     const audio = audioRef.current
     if (!audio || !currentTrack?.streamUrl) return
@@ -97,14 +79,14 @@ export function useAudioEngine() {
     }
   }, [isPlaying, currentTrack?.id, currentTrack?.streamUrl])
 
-  // ---- volume / mute ----
+  // Volume / mute
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
     audio.volume = muted ? 0 : volume
   }, [volume, muted])
 
-  // ---- report progress + duration + handle end-of-track ----
+  // Report progress + handle end-of-track
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
@@ -118,7 +100,6 @@ export function useAudioEngine() {
     const onEnded = async () => {
       const s = usePlayer.getState()
 
-      // Record to localStorage history
       if (s.currentTrack) {
         recordPlay(s.currentTrack, { completed: true })
       }
@@ -138,7 +119,6 @@ export function useAudioEngine() {
         return
       }
 
-      // Queue exhausted -> try auto-play-next recommendation
       if (s.autoPlayNext && s.currentTrack) {
         try {
           const prefs = getPreferences()
@@ -173,7 +153,7 @@ export function useAudioEngine() {
               album: next.album,
               albumId: next.albumId,
               image: next.image,
-              streamUrl: next.streamUrl, // Will be fetched lazily by the engine
+              streamUrl: next.streamUrl,
               duration: next.duration,
               language: next.language,
               label: next.label,

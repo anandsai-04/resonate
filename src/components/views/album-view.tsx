@@ -34,7 +34,7 @@ export function AlbumView({ albumId }: AlbumViewProps) {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
+    Promise.resolve().then(() => { if (!cancelled) setLoading(true) })
     getAlbumDetails(albumId)
       .then((albumData) => {
         if (cancelled || !albumData) return
@@ -60,7 +60,7 @@ export function AlbumView({ albumId }: AlbumViewProps) {
           })) as Track[],
         })
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
@@ -218,5 +218,3 @@ export function AlbumView({ albumId }: AlbumViewProps) {
     </div>
   )
 }
-
-

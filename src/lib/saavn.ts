@@ -1,4 +1,4 @@
-// Piped API - public YouTube Music proxy
+// Piped API client — YouTube Music proxy
 // Stream URLs come from googlevideo.com (never blocked by college firewalls)
 
 const PIPED_INSTANCES = [
@@ -7,9 +7,6 @@ const PIPED_INSTANCES = [
   "https://pipedapi.kavin.rocks",
   "https://pipedapi.adminforge.de",
 ]
-
-// Pick a random instance to spread load
-const PIPED = PIPED_INSTANCES[Math.floor(Math.random() * PIPED_INSTANCES.length)]
 
 export interface SaavnSong {
   id: string
@@ -44,81 +41,112 @@ export interface SaavnLyrics {
 }
 
 async function pipedFetch<T>(path: string): Promise<T> {
-  // Try each instance in order until one works
+  let lastError: Error | null = null
   for (const instance of PIPED_INSTANCES) {
     try {
       const res = await fetch(`${instance}${path}`, {
         headers: { "Accept": "application/json" },
       })
-      if (res.ok) return (await res.json()) as T
-    } catch {
-      // Try next instance
+      if (res.ok) {
+        return (await res.json()) as T
+      }
+      lastError = new Error(`${instance} returned ${res.status}`)
+    } catch (e: any) {
+      lastError = e
     }
   }
-  throw new Error("All Piped instances failed")
+  throw lastError ?? new Error("All Piped instances failed")
 }
 
 export async function searchSongs(query: string, limit = 20): Promise<SaavnSong[]> {
   if (!query.trim()) return []
-  const data = await pipedFetch<{ items: any[] }>(
-    `/search?q=${encodeURIComponent(query)}&filter=music_songs`,
-  )
-  return (data.items ?? []).slice(0, limit).map((item: any) => ({
-    id: item.url.replace("/watch?v=", ""),
-    title: item.title,
-    artist: item.uploaderName ?? "Unknown",
-    album: "",
-    image: item.thumbnail,
-    streamUrl: "", // Fetched on play
-    duration: item.duration ?? 0,
-  }))
+  try {
+    const data = await pipedFetch<{ items: any[] }>(
+      `/search?q=${encodeURIComponent(query)}&filter=music_songs`,
+    )
+    return (data.items ?? []).slice(0, limit).map((item: any) => ({
+      id: (item.url ?? "").replace("/watch?v=", ""),
+      title: item.title ?? "Unknown",
+      artist: item.uploaderName ?? "Unknown",
+      album: "",
+      image: item.thumbnail ?? "",
+      streamUrl: "",
+      duration: item.duration ?? 0,
+    }))
+  } catch (e) {
+    console.error("searchSongs failed:", e)
+    return []
+  }
 }
 
 export async function searchAlbums(query: string, limit = 10): Promise<SaavnAlbum[]> {
   if (!query.trim()) return []
-  const data = await pipedFetch<{ items: any[] }>(
-    `/search?q=${encodeURIComponent(query)}&filter=albums`,
-  )
-  return (data.items ?? []).slice(0, limit).map((item: any) => ({
-    id: item.url.replace("/playlist?list=", ""),
-    name: item.name,
-    artist: item.uploaderName ?? "Unknown",
-    image: item.thumbnail,
-  }))
+  try {
+    const data = await pipedFetch<{ items: any[] }>(
+      `/search?q=${encodeURIComponent(query)}&filter=albums`,
+    )
+    return (data.items ?? []).slice(0, limit).map((item: any) => ({
+      id: (item.url ?? "").replace("/playlist?list=", ""),
+      name: item.name ?? "Unknown",
+      artist: item.uploaderName ?? "Unknown",
+      image: item.thumbnail ?? "",
+    }))
+  } catch (e) {
+    console.error("searchAlbums failed:", e)
+    return []
+  }
 }
 
 export async function getSongDetails(videoId: string): Promise<SaavnSong | null> {
   try {
     const data = await pipedFetch<any>(`/streams/${videoId}`)
-    // Pick the best audio stream (lowest bitrate = fastest, m4a preferred)
-    const audioStreams = data.audioStreams ?? []
+
+    if (!data || !data.audioStreams || data.audioStreams.length === 0) {
+      console.warn("No audio streams for", videoId)
+      return null
+    }
+
+    // Pick best audio stream: prefer m4a/mp4, prefer 128kbps
+    const audioStreams = data.audioStreams
     const preferred =
-      audioStreams.find((s: any) => s.mimeType?.includes("mp4") && s.quality <= 128) ??
+      audioStreams.find((s: any) =>
+        s.mimeType?.includes("mp4") && s.quality === 128
+      ) ??
+      audioStreams.find((s: any) => s.mimeType?.includes("mp4")) ??
+      audioStreams.find((s: any) => s.quality === 128) ??
       audioStreams.find((s: any) => s.quality <= 128) ??
       audioStreams[0]
+
+    const streamUrl = preferred?.url ?? ""
+    if (!streamUrl) {
+      console.warn("No stream URL found for", videoId)
+      return null
+    }
+
     return {
       id: videoId,
-      title: data.title,
-      artist: data.uploader,
+      title: data.title ?? "Unknown",
+      artist: data.uploader ?? "Unknown",
       album: "",
-      image: data.thumbnailUrl,
-      streamUrl: preferred?.url ?? "",
+      image: data.thumbnailUrl ?? "",
+      streamUrl,
       duration: data.duration ?? 0,
     }
-  } catch {
+  } catch (e) {
+    console.error("getSongDetails failed:", e)
     return null
   }
 }
 
 export async function getAlbumDetails(_albumId: string): Promise<SaavnAlbum | null> {
-  // Playlists not implemented in this simplified version
   return null
 }
 
 export async function getLyrics(videoId: string): Promise<SaavnLyrics> {
   try {
     const data = await pipedFetch<any>(`/streams/${videoId}`)
-    return { plainLyrics: data.lyrics ?? undefined }
+    if (!data?.lyrics) return {}
+    return { plainLyrics: data.lyrics }
   } catch {
     return {}
   }
