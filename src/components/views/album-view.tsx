@@ -11,6 +11,7 @@ import { Play, Pause, Heart, Disc3, Clock } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { isAlbumSaved, saveAlbum, unsaveAlbum } from "@/lib/storage"
+import { getAlbumDetails } from "@/lib/saavn"
 
 interface AlbumViewProps {
   albumId: string
@@ -33,49 +34,36 @@ export function AlbumView({ albumId }: AlbumViewProps) {
 
   useEffect(() => {
     let cancelled = false
-    fetch(`/api/search?q=${encodeURIComponent("album " + albumId)}&type=albums&limit=1`)
-      .then((r) => r.json())
-      .then(async (d) => {
-        if (cancelled) return
-        // We need full album details including songs. Use the iTunes lookup API directly.
-        const lookupRes = await fetch(`https://itunes.apple.com/lookup?id=${encodeURIComponent(albumId)}&entity=song`)
-        const lookupData = await lookupRes.json()
-        if (cancelled || !lookupData.results || lookupData.results.length === 0) return
-
-        const albumRow = lookupData.results.find((r: any) => r.wrapperType === "collection")
-        const songs = lookupData.results
-          .filter((r: any) => r.wrapperType === "track" && r.kind === "song")
-          .map((r: any) => ({
-            id: String(r.trackId),
-            title: r.trackName ?? "",
-            artist: r.artistName ?? "Unknown",
-            album: r.collectionName ?? "",
-            albumId: r.collectionId ? String(r.collectionId) : undefined,
-            image: (r.artworkUrl100 ?? "").replace(/100x100bb\.jpg$/, "300x300bb.jpg"),
-            streamUrl: r.previewUrl ?? "",
-            duration: r.trackTimeMillis ? Math.floor(r.trackTimeMillis / 1000) : 0,
-            language: r.country,
-            label: r.primaryGenreName,
-            year: r.releaseDate?.slice(0, 4),
-            year_string: r.releaseDate?.slice(0, 4),
-          }))
-
-        const r = albumRow ?? lookupData.results[0]
+    setLoading(true)
+    getAlbumDetails(albumId)
+      .then((albumData) => {
+        if (cancelled || !albumData) return
         setAlbum({
-          id: String(r.collectionId ?? r.artistId ?? ""),
-          name: r.collectionName ?? "",
-          artist: r.artistName ?? "Unknown",
-          image: (r.artworkUrl100 ?? "").replace(/100x100bb\.jpg$/, "300x300bb.jpg"),
-          year: r.releaseDate?.slice(0, 4),
-          language: r.country,
-          songs,
+          id: albumData.id,
+          name: albumData.name,
+          artist: albumData.artist,
+          image: albumData.image,
+          year: albumData.year,
+          language: albumData.language,
+          songs: (albumData.songs ?? []).map((s) => ({
+            id: s.id,
+            title: s.title,
+            artist: s.artist,
+            album: s.album || albumData.name,
+            albumId: s.albumId,
+            image: s.image,
+            streamUrl: s.streamUrl,
+            duration: s.duration,
+            language: s.language,
+            label: s.label,
+            year: s.year,
+          })) as Track[],
         })
       })
       .catch(() => {})
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
-    // Defer saved-album check to next tick to satisfy set-state-in-effect rule
     Promise.resolve().then(() => {
       if (!cancelled) setSaved(isAlbumSaved(albumId))
     })
@@ -230,3 +218,5 @@ export function AlbumView({ albumId }: AlbumViewProps) {
     </div>
   )
 }
+
+
