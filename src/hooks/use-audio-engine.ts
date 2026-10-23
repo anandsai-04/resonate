@@ -4,53 +4,98 @@ import { useEffect, useRef } from "react"
 import { usePlayer } from "@/lib/player-store"
 import { recordPlay, getPreferences } from "@/lib/storage"
 import { pickNextTrack, getTasteProfileFromStorage } from "@/lib/recommend"
+import { getSongDetails } from "@/lib/saavn"
 import type { Track } from "@/lib/player-store"
 
 /**
  * useAudioEngine
  *
  * Owns the single <audio> element, wires it to the player store.
- * Implements the auto-play-next behaviour — all client-side, no API calls:
- *   - record a play to localStorage when a track ends
- *   - if there's a next track in queue, play it
- *   - else if autoPlayNext is true, use the recommend algorithm to pick a
- *     track matching the current theme, append it to the queue, and play
+ * Implements:
+ *   - lazy stream URL fetching (for Piped API where search doesn't return URLs)
+ *   - auto-play-next: when track ends, pick next based on mood/taste
+ *   - records plays to localStorage history
  */
 export function useAudioEngine() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
-  // Create the audio element lazily on the client
-  if (typeof window !== "undefined" && !audioRef.current) {
-    audioRef.current = new Audio()
-    audioRef.current.preload = "auto"
-  }
+  // Create the audio element in an effect (not during render)
+  useEffect(() => {
+    if (typeof window !== "undefined" && !audioRef.current) {
+      audioRef.current = new Audio()
+      audioRef.current.preload = "auto"
+    }
+  }, [])
 
-  const { currentTrack, isPlaying, volume, muted } = usePlayer.getState()
+  const currentTrack = usePlayer((s) => s.currentTrack)
+  const isPlaying = usePlayer((s) => s.isPlaying)
+  const volume = usePlayer((s) => s.volume)
+  const muted = usePlayer((s) => s.muted)
+
+  // ---- fetch stream URL if missing (Piped API needs this) ----
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio || !currentTrack) return
+    if (currentTrack.streamUrl) return // Already has URL
+
+    let cancelled = false
+    getSongDetails(currentTrack.id)
+      .then((details) => {
+        if (cancelled || !details?.streamUrl) return
+        // Update the current track and queue with the fetched URL
+        const state = usePlayer.getState()
+        const updatedTrack: Track = {
+          ...currentTrack,
+          streamUrl: details.streamUrl,
+          image: details.image || currentTrack.image,
+          duration: details.duration || currentTrack.duration,
+          title: details.title || currentTrack.title,
+          artist: details.artist || currentTrack.artist,
+        }
+        usePlayer.setState({
+          currentTrack: updatedTrack,
+          queue: state.queue.map((t) =>
+            t.id === currentTrack.id ? updatedTrack : t
+          ),
+        })
+        // If we're supposed to be playing, start now
+        if (usePlayer.getState().isPlaying) {
+          audio.src = updatedTrack.streamUrl
+          audio.currentTime = 0
+          audio.play().catch(() => { })
+        }
+      })
+      .catch((e) => console.error("Failed to fetch stream URL:", e))
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentTrack?.id])
 
   // ---- load new track when currentTrack changes ----
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
-    if (!currentTrack?.streamUrl) return
+    if (!currentTrack?.streamUrl) return // Wait for URL to be fetched
     if (audio.src !== currentTrack.streamUrl) {
       audio.src = currentTrack.streamUrl
       audio.currentTime = 0
     }
     if (isPlaying) {
-      audio.play().catch(() => {})
+      audio.play().catch(() => { })
     }
-  }, [currentTrack?.id])
+  }, [currentTrack?.id, currentTrack?.streamUrl])
 
   // ---- play / pause syncing ----
   useEffect(() => {
     const audio = audioRef.current
     if (!audio || !currentTrack?.streamUrl) return
     if (isPlaying) {
-      audio.play().catch(() => {})
+      audio.play().catch(() => { })
     } else {
       audio.pause()
     }
-  }, [isPlaying, currentTrack?.id])
+  }, [isPlaying, currentTrack?.id, currentTrack?.streamUrl])
 
   // ---- volume / mute ----
   useEffect(() => {
@@ -80,7 +125,7 @@ export function useAudioEngine() {
 
       if (s.repeat === "one") {
         audio.currentTime = 0
-        audio.play().catch(() => {})
+        audio.play().catch(() => { })
         return
       }
 
@@ -128,7 +173,7 @@ export function useAudioEngine() {
               album: next.album,
               albumId: next.albumId,
               image: next.image,
-              streamUrl: next.streamUrl,
+              streamUrl: next.streamUrl, // Will be fetched lazily by the engine
               duration: next.duration,
               language: next.language,
               label: next.label,
